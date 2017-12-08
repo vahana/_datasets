@@ -1,0 +1,22 @@
+-e git+https://github.com/roivision/mongoengine.git@c82bcd882a5d73a495b7e5be3a3c60826dd7c2f6#egg=mongoengine
+-e git+https://github.com/vahana/prf.git@a87766648ed2ccf8c54ca745c6ebb4687fa3afd9#egg=prf
+-e git+git@github.com:vahana/slovar.git@89aa46f1b54b51a9b8b8a139d622b76b8ad7b604#egg=slovar
+-e .
+
+hupper==1.0
+marshmallow==1.2.4
+PasteDeploy==1.5.2
+plaster==1.0
+plaster-pastedeploy==0.4.2
+pymongo==3.2.2
+pyramid==1.9.1
+python-dateutil==2.6.1
+repoze.lru==0.7
+requests==2.12.3
+six==1.11.0
+translationstring==1.3
+urllib3==1.22
+venusian==1.1.0
+WebOb==1.7.4
+zope.deprecation==4.3.0
+zope.interface==4.4.3

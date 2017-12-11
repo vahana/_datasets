@@ -1,7 +1,8 @@
 -e git+https://github.com/roivision/mongoengine.git@c82bcd882a5d73a495b7e5be3a3c60826dd7c2f6#egg=mongoengine
--e git+https://github.com/vahana/prf.git@a87766648ed2ccf8c54ca745c6ebb4687fa3afd9#egg=prf
--e git+git@github.com:vahana/slovar.git@89aa46f1b54b51a9b8b8a139d622b76b8ad7b604#egg=slovar
+-e git+https://github.com/vahana/prf.git#egg=prf
 -e .
+
+slovar
 
 hupper==1.0
 marshmallow==1.2.4

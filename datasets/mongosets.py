@@ -1,7 +1,8 @@
+from types import ModuleType
 import re
 import sys
 import logging
-from types import ModuleType, ClassType
+
 import mongoengine as mongo
 from datetime import datetime
 from bson import ObjectId
@@ -44,7 +45,7 @@ class DatasetStorageModule(ModuleType):
     def __getattribute__(self, attr, *args, **kwargs):
         ns = ModuleType.__getattribute__(self, '__name__')
         cls = ModuleType.__getattribute__(self, attr, *args, **kwargs)
-        if isinstance(cls, (type, ClassType)) and issubclass(cls, DynamicBase):
+        if isinstance(cls, (type)) and issubclass(cls, DynamicBase):
             cls._meta['db_alias'] = DATASET_NAMES_MAP[ns]
             try:
                 from mongoengine.connections_manager import ConnectionManager
@@ -101,7 +102,7 @@ def get_dataset_names(match_name="", match_namespace=""):
 def get_namespaces():
     # Mongoengine stores connections as a dict {alias: connection}
     # Getting the keys is the list of aliases (or namespaces) we're connected to
-    return mongo.connection._connections.keys()
+    return list(mongo.connection._connections.keys())
 
 
 def get_document_meta(namespace, doc_name):
@@ -117,7 +118,7 @@ def get_document_meta(namespace, doc_name):
     )
 
     indexes = []
-    for ix_name, index in db[doc_name].index_information().items():
+    for ix_name, index in list(db[doc_name].index_information().items()):
         fields = [
             '%s%s' % (('-' if order == -1 else ''), doc_name)
             for (doc_name, order) in index['key']

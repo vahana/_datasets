@@ -19,12 +19,10 @@ log = logging.getLogger(__name__)
 DATASET_MODULE_NAME = 'datasets.mongosets'
 DATASET_NAMES_MAP = {}
 
-
 def includeme(config):
     config.add_directive('dataset_namespaces', dataset_namespaces)
     set_dataset_module(config.prf_settings().get('dataset.module'))
     connect_dataset_aliases(config)
-
 
 class DSDocumentBase(DynamicBase):
     meta = {'abstract': True}
@@ -237,7 +235,7 @@ def get_or_define_document(name, _raise=False, define=False):
     if not kls and define:
         # Make sure we set the connection if this is a new namespace
         if namespace not in get_dataset_names():
-            connect_namespace(prf.Settings, namespace)
+            connect_namespace(datasets.Settings, namespace)
         kls = define_document(name, namespace=namespace)
         set_document(namespace, name, kls)
 

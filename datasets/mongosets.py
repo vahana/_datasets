@@ -10,8 +10,7 @@ import datetime
 
 import prf
 from prf.mongodb import DynamicBase, mongo_connect
-from prf.utils import dictset, maybe_dotted
-from prf.utils.qs import prep_params
+from prf.utils import dictset, maybe_dotted, prep_params
 
 import datasets
 

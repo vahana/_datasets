@@ -182,7 +182,7 @@ def safe_name(name):
 
 
 def namespace_storage_module(namespace, _set=False):
-    safe_namespace = safe_name(namespace)
+    safe_namespace = safe_name(namespace or '')
     if not safe_namespace:
         raise Exception('A namespace name is required')
     datasets_module = sys.modules[DATASET_MODULE_NAME]
@@ -202,7 +202,7 @@ def namespace_storage_module(namespace, _set=False):
 
 def get_document(namespace, name, _raise=True):
     namespace_module = namespace_storage_module(namespace)
-    cls_name = safe_name(name)
+    cls_name = safe_name(name or '')
     doc_class = None
     try:
         doc_class = getattr(namespace_module, cls_name)
@@ -214,7 +214,7 @@ def get_document(namespace, name, _raise=True):
 
 def set_document(namespace, name, cls):
     namespace_module = namespace_storage_module(namespace, _set=True)
-    ns = safe_name(name)
+    ns = safe_name(name or '')
     setattr(namespace_module, ns, cls)
 
 

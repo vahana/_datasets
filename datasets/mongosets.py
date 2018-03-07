@@ -201,6 +201,9 @@ def namespace_storage_module(namespace, _set=False):
 
 
 def get_document(namespace, name, _raise=True):
+    if namespace is None:
+        namespace, _, name = name.rpartition('.')
+
     namespace_module = namespace_storage_module(namespace)
     cls_name = safe_name(name or '')
     doc_class = None
@@ -224,13 +227,9 @@ def unset_document(cls):
         delattr(namespace_module, cls.__name__)
 
 
-def get_or_define_document(name, _raise=False, define=False):
-    try:
-        namespace, name = name.split('.')
-    except ValueError: #raises this if return is not 2 items - missing namespace
-        namespace = None
-
-    kls = get_document(namespace, name, _raise=_raise)
+def get_or_define_document(name, define=False):
+    namespace, _, name = name.rpartition('.')
+    kls = get_document(namespace, name, _raise=False)
     if not kls and define:
         # Make sure we set the connection if this is a new namespace
         if namespace not in get_dataset_names():

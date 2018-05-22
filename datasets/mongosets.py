@@ -9,7 +9,7 @@ from bson import ObjectId
 import datetime
 
 import prf
-from prf.mongodb import DynamicBase, mongo_connect
+from prf.mongodb import DynamicBase, mongo_connect, mongo_disconnect
 from prf.utils import dictset, maybe_dotted, prep_params
 
 import datasets
@@ -19,9 +19,8 @@ DATASET_MODULE_NAME = 'datasets.mongosets'
 DATASET_NAMES_MAP = {}
 
 def includeme(config):
-    config.add_directive('dataset_namespaces', dataset_namespaces)
     set_dataset_module(config.prf_settings().get('dataset.module'))
-    connect_dataset_aliases(config)
+    # connect_dataset_aliases(config.prf_settings())
 
 class DSDocumentBase(DynamicBase):
     meta = {'abstract': True}
@@ -68,17 +67,17 @@ def connect_namespace(settings, namespace):
     mongo_connect(connect_settings)
 
 
-def connect_dataset_aliases(config):
-    ds = config.dataset_namespaces()
-    if len(ds) == 1 and ds[0] == 'auto':
-        ds = [str(x) for x in mongo.connection.get_connection().database_names()]
-    for namespace in ds:
-        connect_namespace(config.prf_settings(), namespace)
+def registered_namespaces(settings):
+    return  settings.aslist('dataset.namespaces', '') or settings.aslist('dataset.ns', '')
 
 
-def dataset_namespaces(config):
-    return (config.prf_settings().aslist('dataset.namespaces', '')
-            or config.prf_settings().aslist('dataset.ns', ''))
+def connect_dataset_aliases(settings, aliases=None, reconnect=False):
+
+    aliases = aliases or registered_namespaces(settings)
+    for alias in aliases:
+        if reconnect:
+            mongo_disconnect(alias)
+        connect_namespace(settings, alias)
 
 
 def get_dataset_names(match_name="", match_namespace=""):
@@ -161,6 +160,18 @@ def define_document(name, meta=None, namespace='default', redefine=False,
     kls._ns = namespace
     return kls
 
+
+def define_datasets(namespace):
+    connect_namespace(datasets.Settings, namespace)
+    db = mongo.connection.get_db(namespace)
+
+    dsets = []
+    for name in db.collection_names():
+        dsets.append(name)
+
+    return dsets
+
+
 def load_documents():
     names = get_dataset_names()
     _namespaces = set()
@@ -200,6 +211,18 @@ def namespace_storage_module(namespace, _set=False):
     return getattr(datasets_module, safe_namespace, None)
 
 
+def set_document(namespace, name, cls):
+    namespace_module = namespace_storage_module(namespace, _set=True)
+    ns = safe_name(name or '')
+    setattr(namespace_module, ns, cls)
+
+
+def unset_document(cls):
+    namespace_module = namespace_storage_module(cls._ns, _set=True)
+    if hasattr(namespace_module, cls.__name__):
+        delattr(namespace_module, cls.__name__)
+
+
 def get_document(namespace, name, _raise=True):
     if namespace is None:
         namespace, _, name = name.rpartition('.')
@@ -215,26 +238,28 @@ def get_document(namespace, name, _raise=True):
     return doc_class
 
 
-def set_document(namespace, name, cls):
-    namespace_module = namespace_storage_module(namespace, _set=True)
-    ns = safe_name(name or '')
-    setattr(namespace_module, ns, cls)
-
-
-def unset_document(cls):
-    namespace_module = namespace_storage_module(cls._ns, _set=True)
-    if hasattr(namespace_module, cls.__name__):
-        delattr(namespace_module, cls.__name__)
-
-
 def get_or_define_document(name, define=False):
     namespace, _, name = name.rpartition('.')
+
     kls = get_document(namespace, name, _raise=False)
     if not kls and define:
-        # Make sure we set the connection if this is a new namespace
-        if namespace not in get_dataset_names():
-            connect_namespace(datasets.Settings, namespace)
-        kls = define_document(name, namespace=namespace)
+        connect_namespace(datasets.Settings, namespace)
+        kls = define_document(name, namespace=namespace, redefine=True)
         set_document(namespace, name, kls)
+
+    return kls
+
+
+def get_dataset(name, ns=None, define=False):
+
+    if not ns:
+        ns, _, name = name.rpartition('.')
+
+    if define:
+        _raise = False
+
+    connect_namespace(datasets.Settings, ns)
+    kls = define_document(name, namespace=ns, redefine=define)
+    set_document(ns, name, kls)
 
     return kls

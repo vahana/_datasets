@@ -7,13 +7,14 @@ from .mongosets import get_dataset as mongo_get_dataset
 Settings = dictset()
 ES_BE_NAME = '__es'
 URL_BE_NAME = '__url'
-
+CSV_BE_NAME = '__csv'
 
 def get_dataset(ds, ns=None, define=False):
     if isinstance(ds, dict):
         if ds.get('backend') == ES_BE_NAME:
             from prf.es import ES
-            return ES(ds.name)
+            name = '%s.%s' % (ns,ds.name) if ns else ds.name
+            return ES(name)
         else:
             return mongo_get_dataset(ds.name, ns=ns, define=define)
     else:

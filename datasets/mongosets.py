@@ -19,7 +19,7 @@ DATASET_MODULE_NAME = 'datasets.mongosets'
 DATASET_NAMES_MAP = {}
 
 def includeme(config):
-    set_dataset_module(config.prf_settings().get('dataset.module'))
+    # set_dataset_module(config.prf_settings().get('dataset.module'))
     datasets.Settings = dictset(config.registry.settings)
     # connect_dataset_aliases(config.prf_settings())
 

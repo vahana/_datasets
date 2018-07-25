@@ -251,7 +251,7 @@ def get_or_define_document(name, define=False):
     return kls
 
 
-def get_dataset(name, ns=None, define=False):
+def get_mongo_dataset(name, ns=None, define=False):
 
     if not ns:
         ns, _, name = name.rpartition('.')

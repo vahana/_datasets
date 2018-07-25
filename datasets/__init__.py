@@ -1,13 +1,10 @@
 from pyramid.config import Configurator
 
 from prf.utils.dictset import dictset
-from .mongosets import *
-from .mongosets import get_dataset as mongo_get_dataset
+from .mongosets import get_mongo_dataset
+from .backends import ES_BE_NAME
 
 Settings = dictset()
-ES_BE_NAME = '__es'
-URL_BE_NAME = '__url'
-CSV_BE_NAME = '__csv'
 
 def get_dataset(ds, ns=None, define=False):
     if isinstance(ds, dict):
@@ -16,9 +13,9 @@ def get_dataset(ds, ns=None, define=False):
             name = '%s.%s' % (ns,ds.name) if ns else ds.name
             return ES(name)
         else:
-            return mongo_get_dataset(ds.name, ns=ns, define=define)
+            return get_mongo_dataset(ds.name, ns=ns, define=define)
     else:
-        return mongo_get_dataset(ds, ns=ns, define=define)
+        return get_mongo_dataset(ds, ns=ns, define=define)
 
 
 def main(global_config, **settings):

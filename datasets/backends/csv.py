@@ -3,14 +3,14 @@ import os
 
 import prf
 from prf.utils.csv import dict2tab
-import impala
+import datasets
 
 logger = logging.getLogger(__name__)
 
 class CSVBackend(object):
     def __init__(self, params):
         self.params = params
-        self.path = impala.Settings.get('csv.root')
+        self.path = datasets.Settings.get('csv.root')
 
         if not self.path:
             raise prf.exc.HTTPBadRequest('Missing csv.root in config file')

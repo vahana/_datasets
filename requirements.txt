@@ -1,5 +1,6 @@
 -e git+https://github.com/vahana/prf.git#egg=prf
 -e git+https://github.com/vahana/slovar.git#egg=slovar
+
 -e .
 
 marshmallow
@@ -11,3 +12,5 @@ requests
 urllib3
 WebOb
 mongoengine
+elasticsearch==5.5.1
+elasticsearch-dsl==5.4.0

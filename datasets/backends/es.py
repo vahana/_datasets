@@ -2,11 +2,29 @@ import logging
 from elasticsearch import helpers
 
 from slovar import slovar
+from slovar.utils import maybe_dotted
 from prf.es import ES
 
+import datasets
 from datasets.backends.base import Base
 
 log = logging.getLogger(__name__)
+
+
+NOT_ANALLYZED = {
+    "dynamic_templates": [
+        { "notanalyzed": {
+              "match":"*",
+              "match_mapping_type": "string",
+              "mapping": {
+                  "type":"string",
+                  "index":"not_analyzed"
+              }
+           }
+        }
+      ]
+}
+
 
 class ESBackend(Base):
     _buffer = []
@@ -18,26 +36,36 @@ class ESBackend(Base):
     })
 
     def __init__(self, params, job_log=None):
-        self.define_op(params, 'asstr', 'type', default='notanalyzed')
-        self.define_op(params, 'asstr',  'pk')
+        self.define_op(params, 'asstr', 'mapping', allow_missing=True)
+        self.define_op(params, 'asstr', 'pk')
 
-        super(ESProcessor, self).__init__(params, job_log)
+        super(ESBackend, self).__init__(params, job_log)
+
+        doc_type = 'notanalyzed'
+        mapping_body = NOT_ANALLYZED
+
+        if params.get('mapping'):
+            mapping_body = maybe_dotted(params.mapping)()
+            _, _, doc_type = params.mapping.rpartition('.')
+
+        self.params.doc_type = doc_type
+        self.params.mapping_body = mapping_body
 
         #disable throttling for fast bulk indexing
         ES.api.cluster.put_settings(body={
             'transient':{'indices.store.throttle.type' : 'none'}})
 
-        self.create_mapping(params)
+        self.create_mapping(self.params)
 
     def process_many(self, dataset):
-        super(ESProcessor, self).process_many(dataset)
+        super(ESBackend, self).process_many(dataset)
         helpers.bulk(ES.api, self._buffer, stats_only=True)
         self._buffer = []
 
     def _save(self, obj, data):
         action = {
             '_index': self.klass.index,
-            '_type': self.params.type,
+            '_type': self.params.doc_type,
             '_id': data.get(self.params.pk),
             '_op_type': self._ES_OP[self.params.op]
         }
@@ -52,98 +80,17 @@ class ESBackend(Base):
 
         self._buffer.append(action)
 
-
     @classmethod
-    def create_mapping(cls, target):
-        if target.type == 'company':
-            cls.create_company_mapping(target)
-        elif target.type == 'project':
-            cls.create_project_mapping(target)
-        elif target.type == 'person':
-            cls.create_person_mapping(target)
-        elif target.type == 'suggest':
-            cls.create_suggest_mapping(target)
-        elif target.type == 'notanalyzed':
-            cls.create_notanalyzed_mapping(target)
-        else:
-            raise ValueError('Bad type: %s' % target.type)
-
-    @classmethod
-    def target_name(cls, name, mapping):
-        return  '_'.join(filter(bool, [mapping, name]))
-
-    @classmethod
-    def create_suggest_mapping(cls, target):
-        from smurfs.gazelle_es import SUGGEST_MAPPING
-
-        index = cls.target_name(target.name, target.mapping)
-
-        if not ES.api.indices.exists(index):
-            index_settings = impala.Settings.extract('es.index.*')
+    def create_mapping(cls, params):
+        if not ES.api.indices.exists(params.name):
+            index_settings = datasets.Settings.extract('es.index.*')
             log.info('Index settings: %s' % index_settings)
-            ES.api.indices.create(index, body=index_settings or None)
+            ES.api.indices.create(params.name, body=index_settings or None)
 
-        ES.api.indices.put_mapping(**dict(
-                index = index,
-                doc_type = target.type,
-                body = SUGGEST_MAPPING
-            ))
+        ES.api.indices.put_mapping(**dict(index = params.name,
+                                          doc_type = params.doc_type,
+                                          body = params.mapping_body))
 
-    @classmethod
-    def create_notanalyzed_mapping(cls, target):
-        if not ES.api.indices.exists(target.name):
-            index_settings = impala.Settings.extract('es.index.*')
-            log.info('Index settings: %s' % index_settings)
-            ES.api.indices.create(target.name, body=index_settings or None)
-
-        ES.api.indices.put_mapping(**dict(
-                index = target.name,
-                doc_type = target.type,
-                body = NOT_ANALLYZED
-            ))
-
-    @classmethod
-    def create_company_mapping(cls, target):
-        from smurfs.gazelle_es import GAZELLE_COMPANY
-
-        if not ES.api.indices.exists(target.name):
-            index_settings = impala.Settings.extract('es.index.*')
-            log.info('Index settings: %s' % index_settings)
-            ES.api.indices.create(target.name, body=index_settings or None)
-
-        ES.api.indices.put_mapping(**dict(
-                index = target.name,
-                doc_type = target.type,
-                body = GAZELLE_COMPANY
-            ))
-
-    @classmethod
-    def create_project_mapping(cls, target):
-        from smurfs.gazelle_es import GAZELLE_PROJECT
-        if not ES.api.indices.exists(target.name):
-            index_settings = impala.Settings.extract('es.index.*')
-            log.info('Index settings: %s' % index_settings)
-            ES.api.indices.create(target.name, body=index_settings or None)
-
-        ES.api.indices.put_mapping(**dict(
-                index = target.name,
-                doc_type = target.type,
-                body = GAZELLE_PROJECT
-            ))
-
-    @classmethod
-    def create_person_mapping(cls, target):
-        from smurfs.gazelle_es import GAZELLE_PERSON
-        if not ES.api.indices.exists(target.name):
-            index_settings = impala.Settings.extract('es.index.*')
-            log.info('Index settings: %s' % index_settings)
-            ES.api.indices.create(target.name, body=index_settings or None)
-
-        ES.api.indices.put_mapping(**dict(
-                index = target.name,
-                doc_type = target.type,
-                body = GAZELLE_PERSON
-            ))
 
     @classmethod
     def update_settings(cls, index, body):
@@ -158,5 +105,5 @@ class ESBackend(Base):
         return ES.api.indices.get_settings(index)
 
     @classmethod
-    def drop_index(cls, target):
-        ES.api.indices.delete(index=target.name, ignore=[400, 404])
+    def drop_index(cls, params):
+        ES.api.indices.delete(index=params.name, ignore=[400, 404])

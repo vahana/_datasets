@@ -6,29 +6,23 @@ import os
 
 from slovar import slovar
 from slovar.strings import split_strip
-from smurfs.utils import normalize, get_morpher
-from smurfs.gazelle import consolidate_sources, CONSOLIDATE_MODES
-
-import prf
-from prf.utils import (dkdict, dictset, DKeyError, DValueError)
-from prf.utils.csv import dict2tab
-
+from slovar.utils import maybe_dotted
 from prf.utils.utils import typecast
-import datasets
 
+import datasets
 
 logger = logging.getLogger(__name__)
 
 class Base(object):
-    _operations = dictset()
+    _operations = slovar()
 
     def run_transformer(self, data):
         if 'transformer' in self.params:
             trans, _, trans_as = self.params.transformer.partition('__as__')
-            trans = get_morpher(trans)(**datasets.Settings)
+            trans = maybe_dotted(trans)(**datasets.Settings)
             for _d in trans(data):
                 if trans_as:
-                    _d = dictset({trans_as:_d})
+                    _d = slovar({trans_as:_d})
                 return _d
 
         return data
@@ -47,10 +41,10 @@ class Base(object):
     def validate_ops(cls, params):
         invalid_ops = set(params.keys()) - set(cls._operations.keys())
         if invalid_ops:
-            raise DKeyError('Invalid operations %s' % list(invalid_ops))
+            raise KeyError('Invalid operations %s' % list(invalid_ops))
 
     def __init__(self, params, job_log=None):
-        params = dkdict(params)
+        params = slovar(params)
 
         logger.debug('params:\n%s', pformat(params))
 
@@ -73,7 +67,6 @@ class Base(object):
         self.define_op(params, 'asstr',  'op')
         self.define_op(params, 'aslist', 'skip_by', allow_missing=True)
         self.define_op(params, 'asstr',  'transformer', allow_missing=True)
-        self.define_op(params, 'asstr',  'source_consolidation_mode', allow_missing=True)
         self.define_op(params, 'asstr',  'backend', allow_missing=True)
 
         self._operations['query'] = dict
@@ -88,7 +81,7 @@ class Base(object):
         self.klass = datasets.get_dataset(params, ns=params.get('ns'), define=True)
 
         self.params = params
-        self.job_log = job_log or dictset()
+        self.job_log = job_log or slovar()
 
         if (self.params.append_to_set or self.params.append_to) and not self.params.flatten:
             for kk in self.params.append_to_set+self.params.append_to:
@@ -100,15 +93,15 @@ class Base(object):
             self.process(data)
 
     def extract_log(self, data):
-        return dictset(data.pop('log', {})).update_with(self.job_log)
+        return slovar(data.pop('log', {})).update_with(self.job_log)
 
     def extract_meta(self, data):
         log = self.extract_log(data)
         source = data.get('source', {})
-        return dictset(log=log, source=source)
+        return slovar(log=log, source=source)
 
     def process(self, data):
-        data = self.add_extra(dictset(data))
+        data = self.add_extra(slovar(data))
 
         # _op, _, _op_params = self.params.op.partition(':')
         _op = self.params.op
@@ -118,7 +111,7 @@ class Base(object):
             _op_params = split_strip(_op_params)
 
         if _op in ['update', 'upsert', 'delete'] and not _op_params:
-            raise DValueError('missing op params for `%s` operation' % _op)
+            raise ValueError('missing op params for `%s` operation' % _op)
 
         if _op == 'create':
             self.create(data)
@@ -150,7 +143,7 @@ class Base(object):
                             self.log_data_format(query=_op_params))
 
         else:
-            raise DKeyError(
+            raise KeyError(
                 'Must provide `op` param. e.g. op=update:key1,key2')
 
     def create(self, data):
@@ -206,17 +199,6 @@ class Base(object):
                                     append_to=self.params.append_to,
                                     append_to_set=self.params.append_to_set,
                                     flatten=self.params.flatten)
-
-            if 'source_consolidation_mode' in self.params:
-                new_source = consolidate_sources(each_d.get('source', dictset()), meta.source,
-                                                 self.params.source_consolidation_mode)
-                if new_source:
-                    new_data['source'] = new_source
-            elif meta.source:
-                logger.warning(
-                    'SKIP source consolidation. Reason: `source_consolidation_mode` has not been set. Choices are: %s.\nDATA:%s'\
-                         % (CONSOLIDATE_MODES, meta.source)
-                )
 
             self.save(each, new_data, meta)
             logger.debug('UPDATED %r with:\n%s', each,
@@ -291,9 +273,6 @@ class Base(object):
         logs = data.setdefault('logs', [])
         logs.insert(0, meta.log)
 
-        if self.params.normalize:
-            data['n'] = normalize(data, self.params.normalize)
-
         if 'fields' in self.params:
             data = typecast(data.extract(self.params.fields))
 
@@ -327,7 +306,7 @@ class Base(object):
         raise NotImplementedError
 
     def build_query_params(self, data, _keys):
-        query = dictset()
+        query = slovar()
 
         for _k in _keys:
             #unflat if nested
@@ -338,9 +317,9 @@ class Base(object):
 
         if not query:
             if not _keys:
-                raise DValueError('empty op params')
+                raise ValueError('empty op params')
 
-            raise DValueError('update query is empty for:\n%s' %
+            raise ValueError('update query is empty for:\n%s' %
                              self.log_data_format(
                                 query=_keys, data=data))
 

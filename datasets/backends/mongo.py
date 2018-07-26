@@ -1,4 +1,5 @@
 from datasets.backends.base import Base
+from datasets.mongosets import get_mongo_dataset
 
 class MongoBackend(Base):
     def _save(self, obj, data):

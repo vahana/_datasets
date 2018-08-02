@@ -267,7 +267,6 @@ class Base(object):
             logger.warning(msg)
 
     def pre_save(self, data, meta):
-
         data = self.run_transformer(data)
 
         logs = data.setdefault('logs', [])

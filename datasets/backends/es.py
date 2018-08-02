@@ -36,10 +36,13 @@ class ESBackend(Base):
     })
 
     def __init__(self, params, job_log=None):
-        self.define_op(params, 'asstr', 'mapping', allow_missing=True)
-        self.define_op(params, 'asstr', 'pk')
-
         super(ESBackend, self).__init__(params, job_log)
+
+        self.define_op(params, 'asstr', 'mapping', allow_missing=True)
+        self.define_op(params, 'asstr', 'pk', default='id')
+
+        if self.params.op in ['update', 'create', 'delete']:
+            self.params.pk = self.params.op_params
 
         doc_type = 'notanalyzed'
         mapping_body = NOT_ANALLYZED

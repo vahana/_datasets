@@ -13,11 +13,11 @@ class Backend(object):
         self.params = params
 
         if params.get('backend') in ['http', 'https']:
-            self.backend = HTTPBackend(params)
+            self.backend = HTTPBackend(params, job_log)
         elif params.get('backend') == ES_BE_NAME:
-            self.backend = ESBackend(params)
+            self.backend = ESBackend(params, job_log)
         elif params.get('backend') == CSV_BE_NAME:
-            self.backend = CSVBackend(params)
+            self.backend = CSVBackend(params, job_log)
         else:
             self.backend = MongoBackend(params, job_log)
 

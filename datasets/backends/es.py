@@ -30,19 +30,20 @@ class ESBackend(Base):
     _buffer = []
     _ES_OP = slovar({
         'create': 'index',
-        'upsert': 'update',
-        'update': 'update',
         'delete': 'delete',
     })
 
     def __init__(self, params, job_log=None):
+        self.define_op(params, 'asstr', 'mapping', allow_missing=True)
         super(ESBackend, self).__init__(params, job_log)
 
-        self.define_op(params, 'asstr', 'mapping', allow_missing=True)
-        self.define_op(params, 'asstr', 'pk', default='id')
+        if self.params.op not in self._ES_OP:
+            raise ValueError('wrong op %s. Must be one of %s' % (self.params.op, self._ES_OP))
 
-        if self.params.op in ['update', 'create', 'delete']:
-            self.params.pk = self.params.op_params
+        if not self.params.op_params:
+            raise ValueError('op params must be supplied')
+
+        self.params.pk = self.params.op_params
 
         doc_type = 'notanalyzed'
         mapping_body = NOT_ANALLYZED
@@ -65,11 +66,23 @@ class ESBackend(Base):
         helpers.bulk(ES.api, self._buffer, stats_only=True)
         self._buffer = []
 
+    def build_pk(self, data, pk):
+        if len(pk) == 1:
+            return data[pk[0]]
+
+        pk_data = data.extract(pk).flat()
+        pk = []
+
+        for kk in sorted(pk_data.keys()):
+            pk.append(str(pk_data[kk]))
+
+        return ':'.join(pk)
+
     def _save(self, obj, data):
         action = {
             '_index': self.klass.index,
             '_type': self.params.doc_type,
-            '_id': data.get(self.params.pk),
+            '_id': self.build_pk(data, self.params.pk),
             '_op_type': self._ES_OP[self.params.op]
         }
 
@@ -77,9 +90,6 @@ class ESBackend(Base):
             action['_source'] = data
         else:
             action['doc'] = data
-
-        if self.params.op == 'upsert':
-            action['doc_as_upsert'] = 'true'
 
         self._buffer.append(action)
 

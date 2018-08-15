@@ -39,6 +39,8 @@ class Base(object):
 
     @classmethod
     def validate_ops(cls, params):
+        logger.debug('params:\n%s', pformat(params))
+
         invalid_ops = set(params.keys()) - set(cls._operations.keys())
         if invalid_ops:
             raise KeyError('Invalid operations %s' % list(invalid_ops))
@@ -46,12 +48,13 @@ class Base(object):
     def __init__(self, params, job_log=None):
         params = slovar(params)
 
-        logger.debug('params:\n%s', pformat(params))
-
         self.define_op(params, 'asstr',  'name')
         self.define_op(params, 'asbool', 'keep_ids', default=False)
         self.define_op(params, 'asbool', 'overwrite', default=True)
-        self.define_op(params, 'asbool', 'flatten', default=False)
+
+        if self.define_op(params, 'asbool', 'flatten', _raise=False, default=False) is None:
+            self.define_op(params, 'aslist', 'flatten', default=[])
+
         self.define_op(params, 'aslist', 'append_to', default=[])
         self.define_op(params, 'aslist', 'append_to_set', default=[])
         self.define_op(params, 'aslist', 'normalize', default=[])

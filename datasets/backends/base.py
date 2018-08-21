@@ -57,12 +57,11 @@ class Base(object):
 
         self.define_op(params, 'aslist', 'append_to', default=[])
         self.define_op(params, 'aslist', 'append_to_set', default=[])
-        self.define_op(params, 'aslist', 'normalize', default=[])
         self.define_op(params, 'aslist', 'fields', allow_missing=True)
         self.define_op(params, 'aslist', 'pop_empty', default=[])
         self.define_op(params, 'asbool', 'keep_source_logs', default=False)
         self.define_op(params, 'asbool', 'dry_run', default=False)
-        self.define_op(params, 'asint',  'log_size', default=256)
+        self.define_op(params, 'asint',  'log_size', default=5000)
         self.define_op(params, 'aslist', 'log_fields', default=[])
         self.define_op(params, 'asbool', 'log_pretty', default=False)
         self.define_op(params, 'asbool', 'fail_on_error', default=True)
@@ -106,7 +105,6 @@ class Base(object):
     def process(self, data):
         data = self.add_extra(slovar(data))
 
-        # _op, _, _op_params = self.params.op.partition(':')
         _op = self.params.op
         _op_params = self.params.op_params
 
@@ -203,9 +201,8 @@ class Base(object):
                                     append_to_set=self.params.append_to_set,
                                     flatten=self.params.flatten)
 
+            logger.debug('UPDATE with data %s', data)
             self.save(each, new_data, meta)
-            logger.debug('UPDATED %r with:\n%s', each,
-                                        self.log_data_format(query=_params))
 
         return update_count
 

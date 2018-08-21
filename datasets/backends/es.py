@@ -30,11 +30,15 @@ class ESBackend(Base):
     _buffer = []
     _ES_OP = slovar({
         'create': 'index',
+        'update': 'index',
+        'upsert': 'index',
         'delete': 'delete',
     })
 
     def __init__(self, params, job_log=None):
         self.define_op(params, 'asstr', 'mapping', allow_missing=True)
+        self.define_op(params, 'asstr', 'pk', allow_missing=True)
+
         super(ESBackend, self).__init__(params, job_log)
 
         if self.params.op not in self._ES_OP:
@@ -43,7 +47,7 @@ class ESBackend(Base):
         if not self.params.op_params:
             raise ValueError('op params must be supplied')
 
-        self.params.pk = self.params.op_params
+        self.params.pk = self.params.get('pk') or self.params.op_params
 
         doc_type = 'notanalyzed'
         mapping_body = NOT_ANALLYZED
@@ -86,10 +90,12 @@ class ESBackend(Base):
             '_op_type': self._ES_OP[self.params.op]
         }
 
-        if self.params.op == 'create':
-            action['_source'] = data
-        else:
+        data.pop_many(action.keys())
+
+        if self.params.op == 'delete':
             action['doc'] = data
+        else:
+            action['_source'] = data
 
         self._buffer.append(action)
 

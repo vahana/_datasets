@@ -16,6 +16,25 @@ logger = logging.getLogger(__name__)
 class Base(object):
     _operations = slovar()
 
+    @classmethod
+    def process_ds(cls, ds):
+        if isinstance(ds, str):
+            #to avoid circular dep
+            from datasets.backends import MONGO_BE_NAME
+
+            backend, _, name = ds.rpartition('://')
+            backend = backend or MONGO_BE_NAME
+            ns, _, name = ds.partition('.')
+            return slovar(name=name, backend=backend, ns=ns)
+        elif isinstance(ds, dict):
+            ds.has('name')
+            ds.has('backend')
+            ds.has('ns')
+        else:
+            raise ValueError('ds should be either string or dict. got %s' % ds)
+
+        return ds
+
     def run_transformer(self, data):
         if 'transformer' in self.params:
             trans, _, trans_as = self.params.transformer.partition('__as__')
@@ -31,7 +50,7 @@ class Base(object):
     def define_op(cls, params, _type, name, **kw):
 
         if 'default' not in kw:
-            kw.setdefault('raise_on_empty', True)
+            kw.setdefault('raise_on_values', [None, '', []])
 
         ret_val = getattr(params, _type)(name, **kw)
         cls._operations[name] = type(ret_val)
@@ -48,7 +67,7 @@ class Base(object):
     def __init__(self, params, job_log=None):
         params = slovar(params)
 
-        self.define_op(params, 'asstr',  'name')
+        self.define_op(params, 'asstr',  'name', raise_on_values=['', None])
         self.define_op(params, 'asbool', 'keep_ids', default=False)
         self.define_op(params, 'asbool', 'overwrite', default=True)
 
@@ -58,6 +77,8 @@ class Base(object):
         self.define_op(params, 'aslist', 'append_to', default=[])
         self.define_op(params, 'aslist', 'append_to_set', default=[])
         self.define_op(params, 'aslist', 'fields', allow_missing=True)
+        self.define_op(params, 'aslist', 'remove_fields', default=[])
+        self.define_op(params, 'aslist', 'update_fields', default=[])
         self.define_op(params, 'aslist', 'pop_empty', default=[])
         self.define_op(params, 'asbool', 'keep_source_logs', default=False)
         self.define_op(params, 'asbool', 'dry_run', default=False)
@@ -70,17 +91,17 @@ class Base(object):
         self.define_op(params, 'aslist', 'skip_by', allow_missing=True)
         self.define_op(params, 'asstr',  'transformer', allow_missing=True)
         self.define_op(params, 'asstr',  'backend', allow_missing=True)
+        self.define_op(params, 'asstr',  'ns', raise_on_values=[None])
+        self.define_op(params, 'asstr',  'pk')
 
         self._operations['query'] = dict
         self._operations['extra'] = dict
         self._operations['extra_options'] = dict
 
-        params.ns = self.define_op(params, 'asstr', 'ns', allow_missing=True)
-
         self.validate_ops(params)
 
         params.op, _, params.op_params = params.op.partition(':')
-        self.klass = datasets.get_dataset(params, ns=params.get('ns'), define=True)
+        self.klass = datasets.get_dataset(params, define=True)
 
         self.params = params
         self.job_log = job_log or slovar()
@@ -124,9 +145,14 @@ class Base(object):
                 return
 
             self.update_objects(params, objects, data)
+
         elif _op == 'upsert':
             params, objects = self.objects_to_update(_op_params, data)
             if objects:
+                #udpate_fields allows to update only partially if data exists
+                if self.params.update_fields:
+                    data = data.extract(self.params.update_fields)
+
                 self.update_objects(params, objects, data)
             else:
                 self.create(data)
@@ -201,7 +227,7 @@ class Base(object):
                                     append_to_set=self.params.append_to_set,
                                     flatten=self.params.flatten)
 
-            logger.debug('UPDATE with data %s', data)
+            logger.debug('UPDATE with data:\n%s', pformat(data))
             self.save(each, new_data, meta)
 
         return update_count
@@ -291,15 +317,14 @@ class Base(object):
         _data = self.pre_save(data, meta)
 
         try:
-            if self.params.dry_run:
-                logger.warning('DRY RUN')
-                return _data
-
-            return self._save(obj, _data)
+            _data = self._save(obj, _data)
+            return _data
         finally:
-            logger.debug('SAVED %r with data:\n%s', obj,
-                            self.log_data_format(data=_data))
-
+            msg = 'SAVED %r with data:\n%s' % (obj, self.log_data_format(data=_data))
+            if self.params.dry_run:
+                logger.warning('DRY RUN: %s' % msg)
+            else:
+                logger.debug(msg)
 
     def _save(self, obj, new_data):
         raise NotImplementedError

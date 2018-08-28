@@ -7,7 +7,6 @@ ES_BE_NAME = 'es'
 MONGO_BE_NAME = 'mongo'
 CSV_BE_NAME = 'csv'
 
-
 class Backend(object):
     def __init__(self, params, job_log):
         self.params = params

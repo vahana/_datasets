@@ -35,19 +35,27 @@ class ESBackend(Base):
         'delete': 'delete',
     })
 
+    @classmethod
+    def get_dataset(cls, ds, define=False):
+        ds = cls.process_ds(ds)
+
+        if '.' in ds.name:
+            ns, _, ds.name = ds.name.partition('.')
+            ds.ns = ns or ds.ns
+
+        name = '%s.%s' % (ds.ns, ds.name) if ds.ns else ds.name
+        return ES(name)
+
     def __init__(self, params, job_log=None):
         self.define_op(params, 'asstr', 'mapping', allow_missing=True)
-        self.define_op(params, 'asstr', 'pk', allow_missing=True)
 
         super(ESBackend, self).__init__(params, job_log)
 
         if self.params.op not in self._ES_OP:
             raise ValueError('wrong op %s. Must be one of %s' % (self.params.op, self._ES_OP))
 
-        if not self.params.op_params:
+        if self.params.op != 'create' and not self.params.op_params:
             raise ValueError('op params must be supplied')
-
-        self.params.pk = self.params.get('pk') or self.params.op_params
 
         doc_type = 'notanalyzed'
         mapping_body = NOT_ANALLYZED
@@ -72,7 +80,7 @@ class ESBackend(Base):
 
     def build_pk(self, data, pk):
         if len(pk) == 1:
-            return data[pk[0]]
+            return data.flat()[pk[0]]
 
         pk_data = data.extract(pk).flat()
         pk = []
@@ -82,14 +90,15 @@ class ESBackend(Base):
 
         return ':'.join(pk)
 
-    def _save(self, obj, data):
-        action = {
+    def add_to_buffer(self, data):
+        action = slovar({
             '_index': self.klass.index,
             '_type': self.params.doc_type,
             '_id': self.build_pk(data, self.params.pk),
             '_op_type': self._ES_OP[self.params.op]
-        }
+        })
 
+        #these fields are "meta" fields, pop them before adding to buffer
         data.pop_many(action.keys())
 
         if self.params.op == 'delete':
@@ -97,16 +106,45 @@ class ESBackend(Base):
         else:
             action['_source'] = data
 
-        self._buffer.append(action)
+        if not self.params.dry_run:
+            self._buffer.append(action)
+
+        return action
+
+    def _save(self, obj, data):
+
+        if self.params.remove_fields:
+            data = data.extract(['-%s'%it for it in self.params.remove_fields])
+
+        return self.add_to_buffer(data)
+
+    def delete(self, data):
+        try:
+            item = self.add_to_buffer(data)
+
+        finally:
+            msg = 'DELETING %s with data:\n%s' % (item.extract('_index,_type,_id,_op_type'),
+                                                            self.log_data_format(data=item))
+            if self.params.dry_run:
+                log.warning('DRY RUN: %s' % msg)
+            else:
+                log.debug(msg)
+
+
+    @classmethod
+    def index_name(cls, params):
+        return '%s.%s' % (params.ns, params.name)
 
     @classmethod
     def create_mapping(cls, params):
-        if not ES.api.indices.exists(params.name):
+        ds = cls.get_dataset(params)
+
+        if not ES.api.indices.exists(ds.index):
             index_settings = datasets.Settings.extract('es.index.*')
             log.info('Index settings: %s' % index_settings)
-            ES.api.indices.create(params.name, body=index_settings or None)
+            ES.api.indices.create(ds.index, body=index_settings or None)
 
-        ES.api.indices.put_mapping(**dict(index = params.name,
+        ES.api.indices.put_mapping(**dict(index = ds.index,
                                           doc_type = params.doc_type,
                                           body = params.mapping_body))
 
@@ -125,4 +163,5 @@ class ESBackend(Base):
 
     @classmethod
     def drop_index(cls, params):
-        ES.api.indices.delete(index=params.name, ignore=[400, 404])
+        ds = cls.get_dataset(params)
+        ES.api.indices.delete(index=ds.index, ignore=[400, 404])

@@ -8,6 +8,7 @@ import prf
 from prf.utils.utils import maybe_dotted, prep_params
 from prf.utils.csv import dict2tab
 import datasets
+from datasets.backends.base import Base
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,8 @@ class CSVBackend(object):
 
     @classmethod
     def get_dataset(cls, ds):
-        file_name = os.path.join(datasets.Settings.get('csv.root'), ds.name)
+        ds = Base.process_ds(ds)
+        file_name = os.path.join(datasets.Settings.get('csv.root'), ds.ns, ds.name)
         return csv_dataset(file_name)
 
     def __init__(self, params, job_log):

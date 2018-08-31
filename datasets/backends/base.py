@@ -139,7 +139,7 @@ class Base(object):
             self.create(data)
 
         elif _op == 'update':
-            params, objects = self.objects_to_update(_op_params, data)
+            params, objects = self.get_objects(_op_params, data)
             if not objects:
                 self.log_not_found(params, data)
                 return
@@ -147,7 +147,7 @@ class Base(object):
             self.update_objects(params, objects, data)
 
         elif _op == 'upsert':
-            params, objects = self.objects_to_update(_op_params, data)
+            params, objects = self.get_objects(_op_params, data)
             if objects:
                 #udpate_fields allows to update only partially if data exists
                 if self.params.update_fields:
@@ -158,7 +158,7 @@ class Base(object):
                 self.create(data)
 
         elif _op == 'delete':
-            params, objects = self.objects_to_update(_op_params, data)
+            params, objects = self.get_objects(_op_params, data)
             if not objects:
                 self.log_not_found(params, data)
                 return
@@ -189,7 +189,7 @@ class Base(object):
         self.save(obj, data, self.extract_meta(data))
         logger.debug('CREATED %r', obj)
 
-    def objects_to_update(self, keys, data):
+    def get_objects(self, keys, data):
         for kk in keys:
             if '.' in kk and not self.params.flatten:
                 logger.warning('Nested key `%s`? Consider using flatten=1', kk)

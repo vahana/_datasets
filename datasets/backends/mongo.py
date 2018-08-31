@@ -8,9 +8,10 @@ from datetime import datetime
 from bson import ObjectId
 import datetime
 
+from slovar import slovar
 import prf
 from prf.mongodb import DynamicBase, mongo_connect, mongo_disconnect
-from prf.utils import dictset, maybe_dotted, prep_params
+from prf.utils import maybe_dotted, prep_params
 
 import datasets
 
@@ -34,6 +35,10 @@ class MongoBackend(Base):
         set_document(ds.ns, ds.name, kls)
 
         return kls
+
+    @classmethod
+    def get_meta(cls, ns, name):
+        return get_document_meta(ns, name)
 
     def _save(self, obj, data):
 
@@ -63,7 +68,7 @@ class MongoBackend(Base):
         return obj.to_dict()
 
 def includeme(config):
-    datasets.Settings = dictset(config.registry.settings)
+    datasets.Settings = slovar(config.registry.settings)
 
 class DSDocumentBase(DynamicBase):
     meta = {'abstract': True}
@@ -139,9 +144,9 @@ def get_document_meta(namespace, doc_name):
     db = mongo.connection.get_db(namespace)
 
     if doc_name not in db.collection_names():
-        return dictset()
+        return slovar()
 
-    meta = dictset(
+    meta = slovar(
         _cls=doc_name,
         collection=doc_name,
         db_alias=namespace,
@@ -154,7 +159,7 @@ def get_document_meta(namespace, doc_name):
             for (doc_name, order) in index['key']
         ]
 
-        indexes.append(dictset({
+        indexes.append(slovar({
             'name': ix_name,
             'fields':fields,
             'unique': index.get('unique', False)

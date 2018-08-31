@@ -39,12 +39,16 @@ class ESBackend(Base):
     def get_dataset(cls, ds, define=False):
         ds = cls.process_ds(ds)
 
-        if '.' in ds.name:
-            ns, _, ds.name = ds.name.partition('.')
-            ds.ns = ns or ds.ns
+        if ds.ns:
+            name = '%s.%s' % (ds.ns, ds.name)
+        else:
+            name = ds.name
 
-        name = '%s.%s' % (ds.ns, ds.name) if ds.ns else ds.name
         return ES(name)
+
+    @classmethod
+    def get_meta(cls, ns, name):
+        return ES(name).get_meta()
 
     def __init__(self, params, job_log=None):
         self.define_op(params, 'asstr', 'mapping', allow_missing=True)
@@ -71,7 +75,8 @@ class ESBackend(Base):
         ES.api.cluster.put_settings(body={
             'transient':{'indices.store.throttle.type' : 'none'}})
 
-        self.create_mapping(self.params)
+        if self._ES_OP[self.params.op] in [self._ES_OP.create, self._ES_OP.update, self._ES_OP.upsert]:
+            self.create_mapping(self.params)
 
     def process_many(self, dataset):
         super(ESBackend, self).process_many(dataset)

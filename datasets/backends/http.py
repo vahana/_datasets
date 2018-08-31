@@ -54,7 +54,7 @@ class HTTPBackend(object):
     def process_many(self, dataset):
         payload_wrapper = self.params.get('payload_wrapper')
         if payload_wrapper:
-            dataset = dictset({payload_wrapper: dataset}).unflat()
+            dataset = slovar({payload_wrapper: dataset}).unflat()
 
         if isinstance(dataset, dict):
             self.process(dataset)

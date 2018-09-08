@@ -1,5 +1,6 @@
 import logging
 from elasticsearch import helpers
+from bson import ObjectId
 
 from slovar import slovar
 from slovar.utils import maybe_dotted
@@ -61,35 +62,68 @@ class ESBackend(Base):
         if self.params.op != 'create' and not self.params.op_params:
             raise ValueError('op params must be supplied')
 
-        doc_type = 'notanalyzed'
-        mapping_body = NOT_ANALLYZED
+        self.process_mapping()
 
-        if params.get('mapping'):
-            mapping_body = maybe_dotted(params.mapping)()
-            _, _, doc_type = params.mapping.rpartition('.')
+    def process_mapping(self):
 
-        self.params.doc_type = doc_type
-        self.params.mapping_body = mapping_body
+        def set_default_mapping():
+            log.warning('Forgot to pass the mapping param ? `notanalyzed` default mapping will be used')
+            self.params.doc_type = 'notanalyzed'
+            self.params.mapping_body = NOT_ANALLYZED
+
+        def set_mapping(mapping):
+            self.params.mapping_body = maybe_dotted(self.params.mapping)()
+            _, _, self.params.doc_type = self.params.mapping.rpartition('.')
+
+        def use_or_create_mapping(index, mapping):
+            exists = ES.api.indices.get_mapping(index=index, ignore_unavailable=True)
+            if exists:
+                self.params.doc_type = list(exists[index]['mappings'].keys())[0]
+                if mapping:
+                    self.warning('mapping param `%s` will be ignored in favor of pre-existing `%s`',
+                                    mapping, self.params.doc_type)
+            else:
+                if mapping:
+                    set_mapping(mapping)
+                else:
+                    set_default_mapping()
+
+                if not self.params.dry_run:
+                    self.create_mapping(self.params)
+
+            msg = 'Using mapping `%s`' % self.params.doc_type
+            log.info(msg)
+
+        ds = self.get_dataset(self.params)
+        use_or_create_mapping(ds.index, self.params.get('mapping'))
 
         #disable throttling for fast bulk indexing
         ES.api.cluster.put_settings(body={
             'transient':{'indices.store.throttle.type' : 'none'}})
 
-        if self._ES_OP[self.params.op] in [self._ES_OP.create, self._ES_OP.update, self._ES_OP.upsert]:
-            self.create_mapping(self.params)
 
     def process_many(self, dataset):
         super(ESBackend, self).process_many(dataset)
         helpers.bulk(ES.api, self._buffer, stats_only=True)
         self._buffer = []
 
-    def build_pk(self, data, pk):
-        if len(pk) == 1:
-            return data.flat()[pk[0]]
+    def build_pk(self, data):
+        if len(self.params.pk) == 1:
+            pk = self.params.pk[0]
+            if pk == '__GEN__':
+                pk = str(ObjectId())
+                data['id'] = pk
+                return pk
+            else:
+                return data.flat()[pk]
 
-        pk_data = data.extract(pk).flat()
+        pk_data = data.extract(self.params.pk).flat()
+
+        missing = set(self.params.pk) - set(pk_data.keys())
+        if missing:
+            raise KeyError('missing data for pk `%s`. got `%s`' % (self.params.pk, pk_data))
+
         pk = []
-
         for kk in sorted(pk_data.keys()):
             pk.append(str(pk_data[kk]))
 
@@ -99,16 +133,14 @@ class ESBackend(Base):
         action = slovar({
             '_index': self.klass.index,
             '_type': self.params.doc_type,
-            '_id': self.build_pk(data, self.params.pk),
+            '_id': self.build_pk(data),
             '_op_type': self._ES_OP[self.params.op]
         })
 
-        #these fields are "meta" fields, pop them before adding to buffer
+        #these fields are old meta fields, pop them before adding to buffer
         data.pop_many(action.keys())
 
-        if self.params.op == 'delete':
-            action['doc'] = data
-        else:
+        if self.params.op != 'delete':
             action['_source'] = data
 
         if not self.params.dry_run:
@@ -124,10 +156,7 @@ class ESBackend(Base):
         return self.add_to_buffer(data)
 
     def delete(self, data):
-        try:
-            item = self.add_to_buffer(data)
-
-        finally:
+            item = self.add_to_buffer(data.to_dict())
             msg = 'DELETING %s with data:\n%s' % (item.extract('_index,_type,_id,_op_type'),
                                                             self.log_data_format(data=item))
             if self.params.dry_run:
@@ -149,7 +178,9 @@ class ESBackend(Base):
             log.info('Index settings: %s' % index_settings)
             ES.api.indices.create(ds.index, body=index_settings or None)
 
-        ES.api.indices.put_mapping(**dict(index = ds.index,
+        exists = ES.api.indices.get_mapping(index=ds.index, doc_type=params.doc_type, ignore_unavailable=True)
+        if not exists:
+            ES.api.indices.put_mapping(**dict(index = ds.index,
                                           doc_type = params.doc_type,
                                           body = params.mapping_body))
 

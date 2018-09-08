@@ -7,7 +7,8 @@ import os
 from slovar import slovar
 from slovar.strings import split_strip
 from slovar.utils import maybe_dotted
-from prf.utils.utils import typecast
+from prf.utils import typecast, NOW
+
 
 import datasets
 
@@ -36,7 +37,7 @@ class Base(object):
         return ds
 
     def run_transformer(self, data):
-        if 'transformer' in self.params:
+        if self.params.get('transformer'):
             trans, _, trans_as = self.params.transformer.partition('__as__')
             trans = maybe_dotted(trans)(**datasets.Settings)
             for _d in trans(data):
@@ -92,7 +93,7 @@ class Base(object):
         self.define_op(params, 'asstr',  'transformer', allow_missing=True)
         self.define_op(params, 'asstr',  'backend', allow_missing=True)
         self.define_op(params, 'asstr',  'ns', raise_on_values=[None])
-        self.define_op(params, 'asstr',  'pk')
+        self.define_op(params, 'aslist',  'pk')
 
         self._operations['query'] = dict
         self._operations['extra'] = dict
@@ -186,7 +187,7 @@ class Base(object):
             data['original_id'] = data.pop('id', None)
 
         obj = self.klass()
-        self.save(obj, data, self.extract_meta(data))
+        self.save(obj, data, self.extract_meta(data), is_new=True)
         logger.debug('CREATED %r', obj)
 
     def get_objects(self, keys, data):
@@ -272,16 +273,15 @@ class Base(object):
         extra_opts = self.params.get('extra_options', {})
         extra_f = self.params.extra.flat()
 
-        if '_transformer' in extra_f:
-            extra_f.update(
-                data.extract(extra_f.pop('_transformer', '')).flat())
-
         for k in extra_f:
             if extra_f[k] == '__gid__':
                 extra_f[k] = str(ObjectId())
             elif extra_f[k] == '__today__':
                 extra_f[k] = datetime.today()
+            elif extra_f[k] == '__now__':
+                extra_f[k] = datetime.now()
 
+        extra_f = typecast(extra_f)
         return data.flat().update_with(extra_f, **extra_opts).unflat()
 
     def log_not_found(self, params, data, tags=[], msg=''):
@@ -292,7 +292,7 @@ class Base(object):
         if msg:
             logger.warning(msg)
 
-    def pre_save(self, data, meta):
+    def pre_save(self, data, meta, is_new):
         data = self.run_transformer(data)
 
         logs = data.setdefault('logs', [])
@@ -307,14 +307,16 @@ class Base(object):
             if ekey in data and data[ekey] in ['', None, []]:
                 data.pop(ekey)
 
+        data['updated_at'] = NOW()
+
         return data
 
-    def save(self, obj, data, meta):
+    def save(self, obj, data, meta, is_new=False):
         if not data:
             logger.debug('NOTHING TO SAVE')
             return
 
-        _data = self.pre_save(data, meta)
+        _data = self.pre_save(data, meta, is_new)
 
         try:
             _data = self._save(obj, _data)

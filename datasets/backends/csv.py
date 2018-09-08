@@ -87,7 +87,10 @@ class CSVBackend(object):
     @classmethod
     def get_dataset(cls, ds):
         ds = Base.process_ds(ds)
-        file_name = os.path.join(datasets.Settings.get('csv.root'), ds.ns, ds.name)
+        if ds.name.startswith('/'):
+            file_name = ds.name
+        else:
+            file_name = os.path.join(datasets.Settings.get('csv.root'), ds.ns, ds.name)
         return csv_dataset(file_name)
 
     def __init__(self, params, job_log):

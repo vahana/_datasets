@@ -8,7 +8,7 @@ from prf.mongodb import get_document_cls
 
 from datasets import (
     get_dataset_names, define_document, load_documents, get_document,
-    set_document, get_namespaces, namespace_storage_module, get_document_meta,
+    set_document, get_namespaces, namespace_storage_module, get_dataset_meta,
     connect_dataset_aliases, get_or_define_document
 )
 
@@ -86,10 +86,10 @@ class TestDataset(BaseTestCase):
         d = datasets.prftest2.col1
         assert d._meta['db_alias'] == 'prf-test2'
 
-    def test_get_document_meta(self):
-        assert not get_document_meta('default', 'col1')
+    def test_get_dataset_meta(self):
+        assert not get_dataset_meta('default', 'col1')
         self.create_collection('default', 'col1')
-        meta = get_document_meta('default', 'col1')
+        meta = get_dataset_meta('default', 'col1')
         assert meta['db_alias'] == 'default'
         assert meta['_cls'] == 'col1'
         assert meta['collection'] == 'col1'

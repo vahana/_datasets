@@ -35,15 +35,36 @@ def get_dataset(ds, define=False):
     else:
         raise ValueError('Unknown backend in `%s`' % ds)
 
-def get_document_meta(backend, ns, name):
-    if backend == MONGO_BE_NAME:
-        return MongoBackend.get_meta(ns, name)
+def get_dataset_meta(ds):
+    if ds.backend == MONGO_BE_NAME:
+        return MongoBackend.get_meta(ds.ns, ds.name)
 
     elif backend == ES_BE_NAME:
-        return ESBackend.get_meta(ns, name)
+        return ESBackend.get_meta(ds.ns, ds.name)
 
     else:
-        raise ValueError('Unknown backend in `%s`' % ds)
+        raise ValueError('Backend `%s` is not supported for meta info' % ds)
+
+def drop_dataset(ds):
+    if ds.backend == MONGO_BE_NAME:
+        return MongoBackend.drop_dataset(ds)
+
+    elif backend == ES_BE_NAME:
+        return ESBackend.drop_index(ds)
+
+    else:
+        raise ValueError('Backend `%s` is not supported for dropping' % ds)
+
+
+def drop_namespace(ds):
+    if ds.backend == MONGO_BE_NAME:
+        return MongoBackend.drop_namespace(ds.ns)
+
+    elif backend == ES_BE_NAME:
+        return ESBackend.drop_namespace(ds.ns)
+
+    else:
+        raise ValueError('Backend `%s` is not supported for dropping' % ds)
 
 
 def main(global_config, **settings):

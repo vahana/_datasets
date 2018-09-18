@@ -10,7 +10,7 @@ import datetime
 
 from slovar import slovar
 import prf
-from prf.mongodb import DynamicBase, mongo_connect, mongo_disconnect
+from prf.mongodb import DynamicBase, mongo_connect, mongo_disconnect, drop_db
 from prf.utils import maybe_dotted, prep_params
 
 import datasets
@@ -38,7 +38,17 @@ class MongoBackend(Base):
 
     @classmethod
     def get_meta(cls, ns, name):
-        return get_document_meta(ns, name)
+        return get_dataset_meta(ns, name)
+
+    @classmethod
+    def drop_dataset(cls, ds):
+        ds = cls.get_dataset(ds)
+        if ds:
+            ds.drop_collection()
+
+    @classmethod
+    def drop_namespace(cls, ns):
+        drop_db(ns)
 
     def _save(self, obj, data):
 
@@ -140,7 +150,7 @@ def get_namespaces():
     return list(mongo.connection._connections.keys())
 
 
-def get_document_meta(namespace, doc_name):
+def get_dataset_meta(namespace, doc_name):
     db = mongo.connection.get_db(namespace)
 
     if doc_name not in db.collection_names():

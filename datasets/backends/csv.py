@@ -5,6 +5,8 @@ import pandas as pd
 from slovar import slovar
 
 import prf
+from prf.es import ESDoc, Results
+
 from prf.utils.utils import maybe_dotted, prep_params
 from prf.utils.csv import dict2tab
 import datasets
@@ -12,26 +14,13 @@ from datasets.backends.base import Base
 
 logger = logging.getLogger(__name__)
 
-def normalize(_dict):
-    n_dict = slovar()
+NA_LIST = ['', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan',
+            '1.#IND', '1.#QNAN', 'N/A',
+            # 'NA', #removed this b/c we are using it in `parent` fields as a legit value not None.
+            'NULL', 'NaN', 'n/a', 'nan', 'null']
 
-    def _n(text):
-        sc = ' /,()'
-        return ''.join(['_' if c in sc else c for c in text]).lower()
 
-    for kk,vv in list(_dict.items()):
-        if isinstance(vv, str):
-            vv = vv.strip()
-
-        n_dict[_n(kk)] = vv
-
-    return n_dict
-
-class csv_dataset(object):
-    NA_LIST = ['', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan',
-                '1.#IND', '1.#QNAN', 'N/A',
-                # 'NA', #removed this b/c we are using it in `parent` fields as a legit value not None.
-                'NULL', 'NaN', 'n/a', 'nan', 'null']
+class CSV(object):
 
     def __init__(self, file_name):
         if not os.path.isfile(file_name):
@@ -47,22 +36,55 @@ class csv_dataset(object):
 
         return par, specials
 
-    def process_row(self, row, specials):
-        return slovar(row).unflat().extract(specials._fields)
+    def process_row(self, cell_dict, specials):
+        def clean(_dict):
+            n_dict = slovar()
+
+            def _n(text):
+                unders = ' ,\n'
+                removes = '.()/'
+
+                clean = ''
+                for ch in text:
+                    if ch in unders:
+                        clean += '_'
+                    elif ch in removes:
+                        pass
+                    else:
+                        clean += ch
+
+                return clean.lower()
+
+            for kk,vv in list(_dict.items()):
+                n_dict[_n(kk)] = vv
+
+            return n_dict
+
+        if '_clean' in specials:
+            _d = clean(cell_dict)
+        else:
+            _d = slovar(cell_dict)
+
+        return _d.unflat() # mongo freaks out when there are dots in the names
 
     def read_csv(self, page_size, params):
         return pd.read_csv(self.file_name,
                         infer_datetime_format=True,
-                        na_values = self.NA_LIST,
+                        na_values = NA_LIST,
                         keep_default_na = False,
                         dtype=object,
                         chunksize = page_size,
+                        skip_blank_lines=True,
                         **params)
 
     def get_collection(self, **params):
+        _, specials = self.process_params(params)
+        items = []
         for chunk in self.get_collection_paged(1000, **params):
             for each in chunk:
-                yield each
+                items.append(each)
+
+        return Results(None, None, specials, items, self.get_total(_limit=-1), 0)
 
     def get_collection_paged(self, page_size, **params):
         params, specials = self.process_params(params)
@@ -85,17 +107,32 @@ class csv_dataset(object):
 class CSVBackend(object):
 
     @classmethod
+    def ls_namespaces(cls):
+        return os.listdir(datasets.Settings.get('csv.root'))
+
+    @classmethod
+    def ls_ns(cls, ns):
+        path = os.path.join(datasets.Settings.get('csv.root'), ns)
+        if os.path.isdir(path):
+            return [it for it in os.listdir(os.path.join(datasets.Settings.get('csv.root'), ns)) if it.endswith('.csv')]
+
+        raise prf.exc.HTTPBadRequest('%s is not a dir' % ns)
+
+    @classmethod
     def get_dataset(cls, ds):
         ds = Base.process_ds(ds)
         if ds.name.startswith('/'):
             file_name = ds.name
         else:
             file_name = os.path.join(datasets.Settings.get('csv.root'), ds.ns, ds.name)
-        return csv_dataset(file_name)
+        return CSV(file_name)
 
     def __init__(self, params, job_log):
         params.asstr('csv_root', default=datasets.Settings.get('csv.root'))
         params.asbool('drop', default=False)
+
+        # if params.asstr('processor', default=None):
+            # params.processor = maybe_dotted(params.processor, throw=True)
 
         if not params.get('fields'):
             fields = maybe_dotted(params.get('fields_file'), throw=False)
@@ -114,7 +151,7 @@ class CSVBackend(object):
 
     def process_many(self, dataset):
 
-        file_name = os.path.join(self.params.csv_root, self.params.name)
+        file_name = os.path.join(self.params.csv_root, self.params.ns, self.params.name)
         file_opts = 'w+'
         skip_headers = False
 
@@ -125,7 +162,7 @@ class CSVBackend(object):
 
         with open(file_name, file_opts) as csv_file:
             logger.info('Writing csv data to %s' % file_name)
-            csv_data = dict2tab(dataset, self.params.fields,'csv', skip_headers)
+            csv_data = dict2tab(dataset, self.params.fields, 'csv', skip_headers, processor=self.params.processor)
             csv_file.write(csv_data)
             logger.info('Done')
 

@@ -254,7 +254,7 @@ class Base(object):
         if query:
             msg.append('QUERY: `%s`' % query)
         if data:
-            _data = data.extract(self.params.log_fields)
+            _data = slovar(data).extract(self.params.log_fields)
             _fields = list(data.keys())
             if self.params.log_pretty:
                 _data = pformat(_data)
@@ -270,7 +270,8 @@ class Base(object):
         if 'extra' not in self.params:
             return data
 
-        extra_opts = self.params.get('extra_options', {})
+        extra_opts = typecast(self.params.get('extra_options', {}))
+
         extra_f = self.params.extra.flat()
 
         for k in extra_f:
@@ -282,6 +283,10 @@ class Base(object):
                 extra_f[k] = datetime.now()
 
         extra_f = typecast(extra_f)
+
+        if extra_opts:
+            logging.debug('extra_options: %s' % extra_opts)
+
         return data.flat().update_with(extra_f, **extra_opts).unflat()
 
     def log_not_found(self, params, data, tags=[], msg=''):

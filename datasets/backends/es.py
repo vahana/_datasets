@@ -19,7 +19,8 @@ NOT_ANALLYZED = {
               "match_mapping_type": "string",
               "mapping": {
                   "type":"string",
-                  "index":"not_analyzed"
+                  "index":"not_analyzed",
+                  "ignore_above": 10000,
               }
            }
         }
@@ -28,6 +29,7 @@ NOT_ANALLYZED = {
 
 
 class ESBackend(Base):
+    _ROOT_NS = 'ROOT'
     _buffer = []
     _ES_OP = slovar({
         'create': 'index',
@@ -46,6 +48,23 @@ class ESBackend(Base):
             name = ds.name
 
         return ES(name)
+
+    @classmethod
+    def get_namespaces(cls):
+        ns = []
+        for each in cls.get_collections().keys():
+            if '.' in each:
+                ns.append(each.split('.')[0])
+
+        return list(set(ns))
+
+    @classmethod
+    def get_collections(cls, match=''):
+        return ES.api.indices.get_alias(match, ignore_unavailable=True)
+
+    @classmethod
+    def get_root_collections(cls):
+        return [it for it in ESBackend.get_collections() if '.' not in it]
 
     @classmethod
     def get_meta(cls, ns, name):
@@ -76,12 +95,9 @@ class ESBackend(Base):
             _, _, self.params.doc_type = self.params.mapping.rpartition('.')
 
         def use_or_create_mapping(index, mapping):
-            exists = ES.api.indices.get_mapping(index=index, ignore_unavailable=True)
-            if exists:
-                self.params.doc_type = list(exists[index]['mappings'].keys())[0]
-                if mapping:
-                    self.warning('mapping param `%s` will be ignored in favor of pre-existing `%s`',
-                                    mapping, self.params.doc_type)
+            doc_types = ES(index).get_doc_types()
+            if doc_types:
+                self.params.doc_type = doc_types[0]
             else:
                 if mapping:
                     set_mapping(mapping)
@@ -101,10 +117,14 @@ class ESBackend(Base):
         ES.api.cluster.put_settings(body={
             'transient':{'indices.store.throttle.type' : 'none'}})
 
-
     def process_many(self, dataset):
         super(ESBackend, self).process_many(dataset)
-        helpers.bulk(ES.api, self._buffer, stats_only=True)
+        total, errors = helpers.bulk(ES.api, self._buffer, raise_on_error=False)
+        if errors:
+            log.error('`%s` out of `%s` documents failed to index' % (len(errors), total))
+            for err in errors:
+                self.log_data_format(data=err)
+
         self._buffer = []
 
     def build_pk(self, data):
@@ -184,7 +204,6 @@ class ESBackend(Base):
                                           doc_type = params.doc_type,
                                           body = params.mapping_body))
 
-
     @classmethod
     def update_settings(cls, index, body):
         ES.api.indices.close(index)
@@ -201,3 +220,4 @@ class ESBackend(Base):
     def drop_index(cls, params):
         ds = cls.get_dataset(params)
         ES.api.indices.delete(index=ds.index, ignore=[400, 404])
+

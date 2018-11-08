@@ -9,10 +9,61 @@ from slovar.strings import split_strip
 from slovar.utils import maybe_dotted
 from prf.utils import typecast, NOW
 
-
 import datasets
 
 logger = logging.getLogger(__name__)
+
+
+from prf.es import ES
+from elasticsearch import helpers
+
+class JobLoggingHandler(logging.Handler):
+    __LOGGING_FILTER_FIELDS = ['msecs',
+                               'relativeCreated',
+                               'levelno',
+                               'created']
+
+    @staticmethod
+    def __get_es_datetime_str(timestamp):
+        current_date = datetime.utcfromtimestamp(timestamp)
+        return "{0!s}.{1:03d}Z".format(current_date.strftime('%Y-%m-%dT%H:%M:%S'), int(current_date.microsecond / 1000))
+
+    def __init__(self, job):
+        logging.Handler.__init__(self)
+        self.job = job
+        self._buffer = []
+        self._index_name = 'job_logs.job_%s' % job.job.uid
+
+    def flush(self):
+        if self._buffer:
+            actions = (
+                {
+                    '_index': self._index_name,
+                    '_type': 'job_log',
+                    '_source': log_record
+                }
+                for log_record in self._buffer
+            )
+
+            helpers.bulk(
+                client=ES.api,
+                actions=actions,
+                stats_only=True
+            )
+
+    def emit(self, record):
+        self.format(record)
+        rec = dict(job=self.job)
+        for key, value in record.__dict__.items():
+            if key not in JobLoggingHandler.__LOGGING_FILTER_FIELDS:
+                if key == "args":
+                    value = tuple(str(arg) for arg in value)
+                rec[key] = "" if value is None else value
+        rec['timestamp'] = self.__get_es_datetime_str(record.created)
+
+        self._buffer.append(rec)
+        self.flush()
+
 
 class Base(object):
     _operations = slovar()
@@ -35,6 +86,14 @@ class Base(object):
             raise ValueError('ds should be either string or dict. got %s' % ds)
 
         return ds
+
+    @classmethod
+    def setup_job_logger(cls, job):
+        handler = JobLoggingHandler(job)
+        es_log = logging.getLogger(__name__)
+        es_log.setLevel(logging.INFO)
+        es_log.addHandler(handler)
+        return es_log
 
     def run_transformer(self, data):
         if self.params.get('transformer'):
@@ -93,7 +152,7 @@ class Base(object):
         self.define_op(params, 'asstr',  'transformer', allow_missing=True)
         self.define_op(params, 'asstr',  'backend', allow_missing=True)
         self.define_op(params, 'asstr',  'ns', raise_on_values=[None])
-        self.define_op(params, 'aslist',  'pk')
+        self.define_op(params, 'aslist', 'pk', allow_missing=True)
 
         self._operations['query'] = dict
         self._operations['extra'] = dict
@@ -102,15 +161,19 @@ class Base(object):
         self.validate_ops(params)
 
         params.op, _, params.op_params = params.op.partition(':')
+        params.aslist('op_params', default=[])
+
         self.klass = datasets.get_dataset(params, define=True)
 
         self.params = params
         self.job_log = job_log or slovar()
 
+        self.job_logger = self.setup_job_logger(self.job_log)
+
         if (self.params.append_to_set or self.params.append_to) and not self.params.flatten:
             for kk in self.params.append_to_set+self.params.append_to:
                 if '.' in kk:
-                    logger.warning('`%s` for append_to/appent_to_set is nested but `flatten` is not set', kk)
+                    self.job_logger.warning('`%s` for append_to/appent_to_set is nested but `flatten` is not set', kk)
 
     def process_many(self, dataset):
         for data in dataset:
@@ -129,9 +192,6 @@ class Base(object):
 
         _op = self.params.op
         _op_params = self.params.op_params
-
-        if _op_params:
-            _op_params = split_strip(_op_params)
 
         if _op in ['update', 'upsert', 'delete'] and not _op_params:
             raise ValueError('missing op params for `%s` operation' % _op)
@@ -167,9 +227,6 @@ class Base(object):
             for obj in objects:
                 self.delete(obj)
 
-            logger.debug('DELETED %s objects by:\n%s', len(objects),
-                            self.log_data_format(query=_op_params))
-
         else:
             raise KeyError(
                 'Must provide `op` param. e.g. op=update:key1,key2')
@@ -193,7 +250,7 @@ class Base(object):
     def get_objects(self, keys, data):
         for kk in keys:
             if '.' in kk and not self.params.flatten:
-                logger.warning('Nested key `%s`? Consider using flatten=1', kk)
+                self.job_logger.warning('Nested key `%s`? Consider using flatten=1', kk)
 
         _params = self.build_query_params(data, keys)
         if 'query' in self.params:
@@ -206,8 +263,8 @@ class Base(object):
 
         if update_count > 1:
             msg = 'Multiple (%s) updates for\n%s' % (update_count,
-                                                     self.log_data_format(query=_params))
-            logger.warning(msg)
+                                                     self.format4logging(query=_params))
+            self.job_logger.warning(msg)
 
         if not self.params.keep_source_logs:
             #pop the source logs so it does not overwrite the target's
@@ -228,7 +285,6 @@ class Base(object):
                                     append_to_set=self.params.append_to_set,
                                     flatten=self.params.flatten)
 
-            logger.debug('UPDATE with data:\n%s', pformat(data))
             self.save(each, new_data, meta)
 
         return update_count
@@ -244,9 +300,9 @@ class Base(object):
             obj.delete()
         finally:
             logger.debug('DELETED %r with data:\n%s', obj,
-                                self.log_data_format(data=_d))
+                                self.format4logging(data=_d))
 
-    def log_data_format(self, query=None, data=None):
+    def format4logging(self, query=None, data=None):
 
         msg = []
         data_tmpl = 'DATA dict: %%.%ss' % self.params.log_size
@@ -291,11 +347,11 @@ class Base(object):
 
     def log_not_found(self, params, data, tags=[], msg=''):
         msg = msg or 'NOT FOUND in <%s> with:\n%s' % (self.klass,
-                                        self.log_data_format(
+                                        self.format4logging(
                                             query=params, data=data))
 
         if msg:
-            logger.warning(msg)
+            self.job_logger.warning(msg)
 
     def pre_save(self, data, meta, is_new):
         data = self.run_transformer(data)
@@ -327,7 +383,8 @@ class Base(object):
             _data = self._save(obj, _data)
             return _data
         finally:
-            msg = 'SAVED %r with data:\n%s' % (obj, self.log_data_format(data=_data))
+            msg = 'SAVED (%s) %r with data:\n%s' % (
+                'UPDATE' if not is_new else 'NEW', obj, self.format4logging(data=_data))
             if self.params.dry_run:
                 logger.warning('DRY RUN: %s' % msg)
             else:
@@ -351,25 +408,15 @@ class Base(object):
                 raise ValueError('empty op params')
 
             raise ValueError('update query is empty for:\n%s' %
-                             self.log_data_format(
+                             self.format4logging(
                                 query=_keys, data=data))
 
         query['_limit'] = -1
         return query
 
-    def diff(self, d1, d2, keys=None):
-        _d1 = d1.extract(keys)
-        _d2 = d2
-        identical = True
-        for k in _d1:
-            if k in ['id', 'logs']:
-                continue
-            _d1k = _d1.get(k)
-            _d2k = _d2.get(k)
-
-            if _d1k != _d2k:
-                identical = False
-                logger.info('DIFF:\n\t`%s`:`%s`\n\t`%s`:`%s`', k, _d1k, k, _d2k)
-
-        if identical:
-            logger.info('DIFF: target contains source data')
+    def diff(self, d1, d2, keys=[]):
+        _diff = d1.extract(keys).diff(d2.extract(keys))
+        if _diff:
+            logger.info('DIFF:\n%s\n\n', self.format4logging(data=_diff))
+        else:
+            logger.info('DIFF: Identical')

@@ -29,7 +29,7 @@ NOT_ANALLYZED = {
 
 
 class ESBackend(Base):
-    _ROOT_NS = 'ROOT'
+    # _ROOT_NS = 'ROOT'
     _buffer = []
     _ES_OP = slovar({
         'create': 'index',
@@ -50,6 +50,10 @@ class ESBackend(Base):
         return ES(name)
 
     @classmethod
+    def get_collections(cls, match=''):
+        return ES.api.indices.get_alias(match, ignore_unavailable=True)
+
+    @classmethod
     def get_namespaces(cls):
         ns = []
         for each in cls.get_collections().keys():
@@ -57,10 +61,6 @@ class ESBackend(Base):
                 ns.append(each.split('.')[0])
 
         return list(set(ns))
-
-    @classmethod
-    def get_collections(cls, match=''):
-        return ES.api.indices.get_alias(match, ignore_unavailable=True)
 
     @classmethod
     def get_root_collections(cls):
@@ -78,7 +78,7 @@ class ESBackend(Base):
         if self.params.op not in self._ES_OP:
             raise ValueError('wrong op %s. Must be one of %s' % (self.params.op, self._ES_OP))
 
-        if self.params.op != 'create' and not self.params.op_params:
+        if self.params.op in ['update', 'upsert', 'delete'] and not self.params.op_params:
             raise ValueError('op params must be supplied')
 
         self.process_mapping()
@@ -86,7 +86,7 @@ class ESBackend(Base):
     def process_mapping(self):
 
         def set_default_mapping():
-            log.warning('Forgot to pass the mapping param ? `notanalyzed` default mapping will be used')
+            self.job_logger.warning('Forgot to pass the mapping param ? `notanalyzed` default mapping will be used')
             self.params.doc_type = 'notanalyzed'
             self.params.mapping_body = NOT_ANALLYZED
 
@@ -95,7 +95,7 @@ class ESBackend(Base):
             _, _, self.params.doc_type = self.params.mapping.rpartition('.')
 
         def use_or_create_mapping(index, mapping):
-            doc_types = ES(index).get_doc_types()
+            doc_types = ES.get_doc_types(index)
             if doc_types:
                 self.params.doc_type = doc_types[0]
             else:
@@ -119,23 +119,34 @@ class ESBackend(Base):
 
     def process_many(self, dataset):
         super(ESBackend, self).process_many(dataset)
-        total, errors = helpers.bulk(ES.api, self._buffer, raise_on_error=False)
-        if errors:
-            log.error('`%s` out of `%s` documents failed to index' % (len(errors), total))
-            for err in errors:
-                self.log_data_format(data=err)
 
-        self._buffer = []
+        try:
+            if not self.params.dry_run:
+                total, errors = helpers.bulk(ES.api, self._buffer, raise_on_error=False)
+                if errors:
+                    self.job_logger.error('`%s` out of `%s` documents failed to index.\n%s' % (len(errors), len(self._buffer), errors))
+
+            for each in self._buffer:
+                msg = '%s with data:\n%s' % (each.extract('_index,_type,_id,_op_type:upper'),
+                                                                self.format4logging(data=each))
+                if self.params.dry_run:
+                    self.job_logger.warning('DRY RUN:\n'+ msg)
+                else:
+                    self.job_logger.debug(msg)
+        finally:
+            self._buffer = []
 
     def build_pk(self, data):
+        if not self.params.get('pk'):
+            if self.params.op in ['upsert', 'update', 'delete']:
+                self.params.pk = self.params.op_params
+            else:
+                data['id'] = str(ObjectId())
+                return data['id']
+
         if len(self.params.pk) == 1:
             pk = self.params.pk[0]
-            if pk == '__GEN__':
-                pk = str(ObjectId())
-                data['id'] = pk
-                return pk
-            else:
-                return data.flat()[pk]
+            return data.flat()[pk]
 
         pk_data = data.extract(self.params.pk).flat()
 
@@ -149,23 +160,21 @@ class ESBackend(Base):
 
         return ':'.join(pk)
 
-    def add_to_buffer(self, data):
+    def add_to_buffer(self, data, _id):
         action = slovar({
             '_index': self.klass.index,
             '_type': self.params.doc_type,
-            '_id': self.build_pk(data),
+            '_id': _id,
             '_op_type': self._ES_OP[self.params.op]
         })
 
-        #these fields are old meta fields, pop them before adding to buffer
-        data.pop_many(action.keys())
 
         if self.params.op != 'delete':
+            #these fields are old meta fields, pop them before adding to buffer
+            data.pop_many(action.keys())
             action['_source'] = data
 
-        if not self.params.dry_run:
-            self._buffer.append(action)
-
+        self._buffer.append(action)
         return action
 
     def _save(self, obj, data):
@@ -173,17 +182,10 @@ class ESBackend(Base):
         if self.params.remove_fields:
             data = data.extract(['-%s'%it for it in self.params.remove_fields])
 
-        return self.add_to_buffer(data)
+        return self.add_to_buffer(data, self.build_pk(data))
 
     def delete(self, data):
-            item = self.add_to_buffer(data.to_dict())
-            msg = 'DELETING %s with data:\n%s' % (item.extract('_index,_type,_id,_op_type'),
-                                                            self.log_data_format(data=item))
-            if self.params.dry_run:
-                log.warning('DRY RUN: %s' % msg)
-            else:
-                log.debug(msg)
-
+        self.add_to_buffer({}, getattr(data, self.params.op_params))
 
     @classmethod
     def index_name(cls, params):

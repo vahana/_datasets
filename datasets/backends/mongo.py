@@ -11,7 +11,7 @@ import datetime
 from slovar import slovar
 import prf
 from prf.mongodb import DynamicBase, mongo_connect, mongo_disconnect, drop_db
-from prf.utils import maybe_dotted, prep_params
+from prf.utils import maybe_dotted
 
 import datasets
 
@@ -53,7 +53,7 @@ class MongoBackend(Base):
     def _save(self, obj, data):
 
         #this is mostly for the __repr__ to show correct object id field
-        obj._pk_field = self.params.pk
+        obj._pk_field = self.params.get('pk') or 'id'
 
         if self.params.dry_run:
             return data
@@ -117,8 +117,14 @@ def connect_namespace(settings, namespace):
 
 
 def registered_namespaces(settings):
-    return  settings.aslist('dataset.namespaces', '') or settings.aslist('dataset.ns', '')
+    ns = settings.aslist('dataset.namespaces', '') \
+        or settings.aslist('dataset.ns', '') \
 
+    if ns[0] == '*':
+        return mongo.connection.get_connection().database_names()
+
+    else:
+        return ns
 
 def connect_dataset_aliases(settings, aliases=None, reconnect=False):
 

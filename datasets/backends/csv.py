@@ -7,12 +7,12 @@ from slovar import slovar
 import prf
 from prf.es import ESDoc, Results
 
-from prf.utils.utils import maybe_dotted, prep_params
+from prf.utils.utils import maybe_dotted, parse_specials
 from prf.utils.csv import dict2tab
 import datasets
 from datasets.backends.base import Base
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 NA_LIST = ['', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan',
             '1.#IND', '1.#QNAN', 'N/A',
@@ -24,11 +24,11 @@ class CSV(object):
 
     def __init__(self, file_name):
         if not os.path.isfile(file_name):
-            raise ValueError('File does not exist %s' % file_name)
+            log.error('File does not exist %s' % file_name)
         self.file_name = file_name
 
     def process_params(self, params):
-        _, specials = prep_params(slovar(params))
+        _, specials = parse_specials(slovar(params))
 
         par = slovar()
         par.skiprows = specials._start or None
@@ -79,12 +79,16 @@ class CSV(object):
 
     def get_collection(self, **params):
         _, specials = self.process_params(params)
+
+        if specials._count:
+            return self.get_total(**params)
+
         items = []
         for chunk in self.get_collection_paged(1000, **params):
             for each in chunk:
                 items.append(each)
 
-        return Results(None, None, specials, items, self.get_total(_limit=-1), 0)
+        return Results(None, specials, items, self.get_total(_limit=-1), 0)
 
     def get_collection_paged(self, page_size, **params):
         params, specials = self.process_params(params)
@@ -99,7 +103,10 @@ class CSV(object):
         return df.shape[0]
 
     def drop_collection(self):
-        pass
+        try:
+            os.remove(self.file_name)
+        except FileNotFoundError as e:
+            log.error(e)
 
     def unregister(self):
         pass
@@ -131,9 +138,6 @@ class CSVBackend(object):
         params.asstr('csv_root', default=datasets.Settings.get('csv.root'))
         params.asbool('drop', default=False)
 
-        # if params.asstr('processor', default=None):
-            # params.processor = maybe_dotted(params.processor, throw=True)
-
         if not params.get('fields'):
             fields = maybe_dotted(params.get('fields_file'), throw=False)
             if not fields:
@@ -151,7 +155,15 @@ class CSVBackend(object):
 
     def process_many(self, dataset):
 
+        dir_path = os.path.join(self.params.csv_root, self.params.ns)
         file_name = os.path.join(self.params.csv_root, self.params.ns, self.params.name)
+
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+
+        if not file_name.endswith('csv'):
+            file_name +='.csv'
+
         file_opts = 'w+'
         skip_headers = False
 
@@ -161,8 +173,8 @@ class CSVBackend(object):
             skip_headers = True
 
         with open(file_name, file_opts) as csv_file:
-            logger.info('Writing csv data to %s' % file_name)
-            csv_data = dict2tab(dataset, self.params.fields, 'csv', skip_headers, processor=self.params.processor)
+            log.info('Writing csv data to %s' % file_name)
+            csv_data = dict2tab(dataset, self.params.fields, 'csv', skip_headers, processor=self.params.get('processor'))
             csv_file.write(csv_data)
-            logger.info('Done')
+            log.info('Done')
 

@@ -89,10 +89,10 @@ class Base(object):
 
     @classmethod
     def setup_job_logger(cls, job):
-        handler = JobLoggingHandler(job)
+        # handler = JobLoggingHandler(job)
         es_log = logging.getLogger(__name__)
-        es_log.setLevel(logging.INFO)
-        es_log.addHandler(handler)
+        # es_log.setLevel(logging.INFO)
+        # es_log.addHandler(handler)
         return es_log
 
     def run_transformer(self, data):

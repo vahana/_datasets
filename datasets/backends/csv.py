@@ -1,6 +1,7 @@
 import logging
 import os
 import pandas as pd
+import csv
 
 from slovar import slovar
 
@@ -26,6 +27,10 @@ class CSV(object):
         if not os.path.isfile(file_name):
             log.error('File does not exist %s' % file_name)
         self.file_name = file_name
+
+    def sniff(self, file_name):
+        with open(file_name, 'r') as csvfile:
+            return csv.Sniffer().sniff(csvfile.read(1024))
 
     def process_params(self, params):
         _, specials = parse_specials(slovar(params))
@@ -75,9 +80,12 @@ class CSV(object):
                         dtype=object,
                         chunksize = page_size,
                         skip_blank_lines=True,
+                        engine = 'c',
+                        dialect = self.sniff(self.file_name),
                         **params)
 
     def get_collection(self, **params):
+        params = slovar(params)
         _, specials = self.process_params(params)
 
         if specials._count:
@@ -91,6 +99,7 @@ class CSV(object):
         return Results(None, specials, items, self.get_total(_limit=-1), 0)
 
     def get_collection_paged(self, page_size, **params):
+        params = slovar(params)
         params, specials = self.process_params(params)
 
         df = self.read_csv(page_size, params)
@@ -121,7 +130,7 @@ class CSVBackend(object):
     def ls_ns(cls, ns):
         path = os.path.join(datasets.Settings.get('csv.root'), ns)
         if os.path.isdir(path):
-            return [it for it in os.listdir(os.path.join(datasets.Settings.get('csv.root'), ns)) if it.endswith('.csv')]
+            return [it for it in os.listdir(os.path.join(datasets.Settings.get('csv.root'), ns))]
 
         raise prf.exc.HTTPBadRequest('%s is not a dir' % ns)
 

@@ -122,9 +122,12 @@ class ESBackend(Base):
 
         try:
             if not self.params.dry_run:
-                total, errors = helpers.bulk(ES.api, self._buffer, raise_on_error=False)
+                total, errors = helpers.bulk(ES.api, self._buffer,
+                                                raise_on_error=False,
+                                                refresh=True)
                 if errors:
-                    self.job_logger.error('`%s` out of `%s` documents failed to index.\n%s' % (len(errors), len(self._buffer), errors))
+                    self.job_logger.error('`%s` out of `%s` documents failed to index.\n%s' \
+                                                        % (len(errors), len(self._buffer), errors))
 
             for each in self._buffer:
                 msg = '%s with data:\n%s' % (each.extract('_index,_type,_id,_op_type:upper'),

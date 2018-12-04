@@ -95,16 +95,10 @@ class Base(object):
         # es_log.addHandler(handler)
         return es_log
 
-    def run_transformer(self, data):
+    def get_transformer(self):
         if self.params.get('transformer'):
             trans, _, trans_as = self.params.transformer.partition('__as__')
-            trans = maybe_dotted(trans)(**datasets.Settings)
-            for _d in trans(data):
-                if trans_as:
-                    _d = slovar({trans_as:_d})
-                return _d
-
-        return data
+            return maybe_dotted(trans)(trans_as=trans_as, **datasets.Settings)
 
     @classmethod
     def define_op(cls, params, _type, name, **kw):
@@ -129,7 +123,9 @@ class Base(object):
 
         self.define_op(params, 'asstr',  'name', raise_on_values=['', None])
         self.define_op(params, 'asbool', 'keep_ids', default=False)
-        self.define_op(params, 'asbool', 'overwrite', default=True)
+
+        if self.define_op(params, 'asbool', 'overwrite', _raise=False, default=True) is None:
+            self.define_op(params, 'aslist', 'overwrite', default=[])
 
         if self.define_op(params, 'asbool', 'flatten', _raise=False, default=False) is None:
             self.define_op(params, 'aslist', 'flatten', default=[])
@@ -174,6 +170,8 @@ class Base(object):
             for kk in self.params.append_to_set+self.params.append_to:
                 if '.' in kk:
                     self.job_logger.warning('`%s` for append_to/appent_to_set is nested but `flatten` is not set', kk)
+
+        self.transformer = self.get_transformer()
 
     def process_many(self, dataset):
         for data in dataset:
@@ -278,16 +276,20 @@ class Base(object):
             if 'show_diff' in self.params:
                 self.diff(data, each_d, self.params.show_diff)
 
-            new_data = each_d.update_with(
-                                    data,
-                                    overwrite=self.params.overwrite,
-                                    append_to=self.params.append_to,
-                                    append_to_set=self.params.append_to_set,
-                                    flatten=self.params.flatten)
-
+            new_data = self.update_object(data, each_d)
             self.save(each, new_data, meta)
 
         return update_count
+
+    def update_object(self, src, trg):
+
+        actions = self.params.extract(
+                    ['overwrite', 'append_to', 'append_to_set', 'flatten'])
+
+        if self.transformer:
+            actions = self.transformer.pre_update(src, trg) or actions
+
+        return trg.update_with(src, **actions)
 
     def delete(self, obj):
         _d = obj.to_dict()
@@ -354,7 +356,8 @@ class Base(object):
             self.job_logger.warning(msg)
 
     def pre_save(self, data, meta, is_new):
-        data = self.run_transformer(data)
+        if self.transformer:
+            data = self.transformer.pre_save(data)
 
         logs = data.setdefault('logs', [])
         logs.insert(0, meta.log)

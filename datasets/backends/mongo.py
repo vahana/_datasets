@@ -50,7 +50,7 @@ class MongoBackend(Base):
     def drop_namespace(cls, ns):
         drop_db(ns)
 
-    def _save(self, obj, data):
+    def save(self, obj, data):
 
         #this is mostly for the __repr__ to show correct object id field
         obj._pk_field = self.params.get('pk') or 'id'

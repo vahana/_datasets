@@ -1,6 +1,7 @@
 import logging
 from elasticsearch import helpers
 from bson import ObjectId
+from pprint import pformat
 
 from slovar import slovar
 from slovar.utils import maybe_dotted
@@ -119,6 +120,7 @@ class ESBackend(Base):
 
     def process_many(self, dataset):
         super(ESBackend, self).process_many(dataset)
+        errors = []
 
         try:
             if not self.params.dry_run:
@@ -126,16 +128,24 @@ class ESBackend(Base):
                                                 raise_on_error=False,
                                                 refresh=True)
                 if errors:
-                    self.job_logger.error('`%s` out of `%s` documents failed to index.\n%s' \
-                                                        % (len(errors), len(self._buffer), errors))
+                    for err in errors:
+                        self.job_logger.error(pformat(err))
+
+                    msg = '`%s` out of `%s` documents failed to index' % (len(errors), len(self._buffer))
+                    #if more than 1/4 failed, lets raise. clearly something is up !
+                    if len(errors) > len(self._buffer)/4:
+                        raise ValueError(msg)
+                    else:
+                        self.job_logger.error(msg)
 
             for each in self._buffer:
-                msg = '%s with data:\n%s' % (each.extract('_index,_type,_id,_op_type:upper'),
-                                                                self.format4logging(data=each))
+                msg = '%s with data:\n%s' % (each['_op_type'].upper(), self.format4logging(data=each))
+
                 if self.params.dry_run:
                     self.job_logger.warning('DRY RUN:\n'+ msg)
                 else:
                     self.job_logger.debug(msg)
+
         finally:
             self._buffer = []
 
@@ -180,7 +190,7 @@ class ESBackend(Base):
         self._buffer.append(action)
         return action
 
-    def _save(self, obj, data):
+    def save(self, obj, data):
 
         if self.params.remove_fields:
             data = data.extract(['-%s'%it for it in self.params.remove_fields])

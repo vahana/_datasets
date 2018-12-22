@@ -29,8 +29,11 @@ class CSV(object):
         self.file_name = file_name
 
     def sniff(self, file_name):
-        with open(file_name, 'r') as csvfile:
-            return csv.Sniffer().sniff(csvfile.read(1024))
+        try:
+            with open(file_name, 'r') as csvfile:
+                return csv.Sniffer().sniff(csvfile.read(1024))
+        except Exception as e:
+            log.error('Error sniffing %s file. error: %s', file_name, e)
 
     def process_params(self, params):
         _, specials = parse_specials(slovar(params))

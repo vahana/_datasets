@@ -7,7 +7,7 @@ import os
 from slovar import slovar
 from slovar.strings import split_strip
 from slovar.utils import maybe_dotted
-from prf.utils import typecast, NOW
+from prf.utils import typecast, str2dt
 
 import datasets
 
@@ -130,15 +130,17 @@ class Base(object):
         if self.define_op(params, 'asbool', 'flatten', _raise=False, default=False) is None:
             self.define_op(params, 'aslist', 'flatten', default=[])
 
+        if self.define_op(params, 'asbool', 'pop_empty', _raise=False, default=False) is None:
+            self.define_op(params, 'aslist', 'pop_empty', default=[])
+
         self.define_op(params, 'aslist', 'append_to', default=[])
         self.define_op(params, 'aslist', 'append_to_set', default=[])
         self.define_op(params, 'aslist', 'fields', allow_missing=True)
         self.define_op(params, 'aslist', 'remove_fields', default=[])
         self.define_op(params, 'aslist', 'update_fields', default=[])
-        self.define_op(params, 'aslist', 'pop_empty', default=[])
         self.define_op(params, 'asbool', 'keep_source_logs', default=False)
         self.define_op(params, 'asbool', 'dry_run', default=False)
-        self.define_op(params, 'asint',  'log_size', default=5000)
+        self.define_op(params, 'asint',  'log_size', default=1000)
         self.define_op(params, 'aslist', 'log_fields', default=[])
         self.define_op(params, 'asbool', 'log_pretty', default=False)
         self.define_op(params, 'asbool', 'fail_on_error', default=True)
@@ -242,7 +244,7 @@ class Base(object):
             data['original_id'] = data.pop('id', None)
 
         obj = self.klass()
-        self.save(obj, data, self.extract_meta(data), is_new=True)
+        self._save(obj, data, self.extract_meta(data), is_new=True)
         logger.debug('CREATED %r', obj)
 
     def get_objects(self, keys, data):
@@ -276,20 +278,21 @@ class Base(object):
             if 'show_diff' in self.params:
                 self.diff(data, each_d, self.params.show_diff)
 
-            new_data = self.update_object(data, each_d)
-            self.save(each, new_data, meta)
+            new_data = self.update_object(each_d, data)
+            self._save(each, new_data, meta)
 
         return update_count
 
-    def update_object(self, src, trg):
+    def update_object(self, data, new_data):
 
         actions = self.params.extract(
                     ['overwrite', 'append_to', 'append_to_set', 'flatten'])
 
         if self.transformer:
-            actions = self.transformer.pre_update(src, trg) or actions
+            actions = self.transformer.pre_update(new_data, data) or actions
+            logger.debug('ACTIONS:\n%s', pformat(actions))
 
-        return trg.update_with(src, **actions)
+        return data.update_with(new_data, **actions)
 
     def delete(self, obj):
         _d = obj.to_dict()
@@ -328,8 +331,6 @@ class Base(object):
         if 'extra' not in self.params:
             return data
 
-        extra_opts = typecast(self.params.get('extra_options', {}))
-
         extra_f = self.params.extra.flat()
 
         for k in extra_f:
@@ -342,10 +343,7 @@ class Base(object):
 
         extra_f = typecast(extra_f)
 
-        if extra_opts:
-            logging.debug('extra_options: %s' % extra_opts)
-
-        return data.flat().update_with(extra_f, **extra_opts).unflat()
+        return data.flat().update_with(extra_f, overwrite=0).unflat()
 
     def log_not_found(self, params, data, tags=[], msg=''):
         msg = msg or 'NOT FOUND in <%s> with:\n%s' % (self.klass,
@@ -355,27 +353,57 @@ class Base(object):
         if msg:
             self.job_logger.warning(msg)
 
-    def pre_save(self, data, meta, is_new):
-        if self.transformer:
-            data = self.transformer.pre_save(data)
+    def new_logs(self, logs):
+        #check the very first log item
+        if isinstance(logs[-1]['source'], dict):
+            #all logs are converted. nothing to do.
+            return logs
 
+        new_logs = []
+
+        for each in logs:
+            #old format `source` was just a string
+            if isinstance(each.source, str):
+                each.update(slovar(each).extract(
+                    'source__as__source.name,target__as__target.name,merger__as__merger.name'))
+
+            new_logs.append(each)
+
+        return new_logs
+
+    def process_empty(self, data):
+        if self.params.pop_empty:
+            if isinstance(self.params.pop_empty, bool):
+                data = data.pop_by_values(['', None, []])
+            else:
+                for ekey in self.params.pop_empty:
+                    if ekey in data and data[ekey] in ['', None, []]:
+                        data.pop(ekey)
+        return data
+
+
+    def pre_save(self, data, meta, is_new):
         logs = data.setdefault('logs', [])
         logs.insert(0, meta.log)
+
+        #TODO: remove at some point when all logs are converted.
+        logs = self.new_logs(logs)
 
         if 'fields' in self.params:
             data = typecast(data.extract(self.params.fields))
 
         data['logs'] = logs
+        data['updated_at'] = logs[0].created_at
 
-        for ekey in self.params.pop_empty:
-            if ekey in data and data[ekey] in ['', None, []]:
-                data.pop(ekey)
-
-        data['updated_at'] = NOW()
-
+        data = self.process_empty(data)
         return data
 
-    def save(self, obj, data, meta, is_new=False):
+    def _save(self, obj, data, meta, is_new=False):
+        if self.transformer:
+            #pre_save returns iterator. we only care about the first item here.
+            for data in self.transformer.pre_save(data):
+                break
+
         if not data:
             logger.debug('NOTHING TO SAVE')
             return
@@ -383,7 +411,7 @@ class Base(object):
         _data = self.pre_save(data, meta, is_new)
 
         try:
-            _data = self._save(obj, _data)
+            _data = self.save(obj, _data)
             return _data
         finally:
             msg = 'SAVED (%s) %r with data:\n%s' % (
@@ -393,7 +421,7 @@ class Base(object):
             else:
                 logger.debug(msg)
 
-    def _save(self, obj, new_data):
+    def save(self, obj, new_data):
         raise NotImplementedError
 
     def build_query_params(self, data, _keys):

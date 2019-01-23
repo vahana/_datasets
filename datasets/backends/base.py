@@ -95,11 +95,6 @@ class Base(object):
         # es_log.addHandler(handler)
         return es_log
 
-    def get_transformer(self):
-        if self.params.get('transformer'):
-            trans, _, trans_as = self.params.transformer.partition('__as__')
-            return maybe_dotted(trans)(trans_as=trans_as, **datasets.Settings)
-
     @classmethod
     def define_op(cls, params, _type, name, **kw):
 
@@ -155,6 +150,8 @@ class Base(object):
         self._operations['query'] = dict
         self._operations['extra'] = dict
         self._operations['extra_options'] = dict
+        self._operations['settings'] = dict
+        self._operations['transformer_args'] = dict
 
         self.validate_ops(params)
 
@@ -173,7 +170,7 @@ class Base(object):
                 if '.' in kk:
                     self.job_logger.warning('`%s` for append_to/appent_to_set is nested but `flatten` is not set', kk)
 
-        self.transformer = self.get_transformer()
+        self.transformer = datasets.get_transformer(params)
 
     def process_many(self, dataset):
         for data in dataset:
@@ -353,7 +350,15 @@ class Base(object):
         if msg:
             self.job_logger.warning(msg)
 
-    def new_logs(self, logs):
+    def new_logs(self, data, meta):
+        logs = data.pop('logs', [])
+        if not isinstance(logs, list):
+            raise ValueError(
+                '`logs` field suppose to be a `list` type, got %s instead.\nlogs=%s' % (type(logs), logs))
+
+        logs.insert(0, meta.log)
+
+        #TODO: remove this at some point when all logs are converted to dict
         #check the very first log item
         if isinstance(logs[-1]['source'], dict):
             #all logs are converted. nothing to do.
@@ -383,19 +388,19 @@ class Base(object):
 
 
     def pre_save(self, data, meta, is_new):
-        logs = data.setdefault('logs', [])
-        logs.insert(0, meta.log)
-
-        #TODO: remove at some point when all logs are converted.
-        logs = self.new_logs(logs)
+        logs = self.new_logs(data, meta)
 
         if 'fields' in self.params:
             data = typecast(data.extract(self.params.fields))
 
-        data['logs'] = logs
-        data['updated_at'] = logs[0].created_at
-
         data = self.process_empty(data)
+
+        if not data:
+            return data
+
+        data['updated_at'] = logs[0].created_at
+        data['logs'] = logs
+
         return data
 
     def _save(self, obj, data, meta, is_new=False):
@@ -404,11 +409,11 @@ class Base(object):
             for data in self.transformer.pre_save(data):
                 break
 
-        if not data:
+        _data = self.pre_save(data, meta, is_new)
+
+        if not _data:
             logger.debug('NOTHING TO SAVE')
             return
-
-        _data = self.pre_save(data, meta, is_new)
 
         try:
             _data = self.save(obj, _data)

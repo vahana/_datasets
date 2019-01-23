@@ -2,11 +2,11 @@ import logging
 import os
 import pandas as pd
 import csv
+import fnmatch
 
 from slovar import slovar
 
 import prf
-from prf.es import ESDoc, Results
 
 from prf.utils.utils import maybe_dotted, parse_specials
 from prf.utils.csv import dict2tab
@@ -20,6 +20,13 @@ NA_LIST = ['', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan',
             # 'NA', #removed this b/c we are using it in `parent` fields as a legit value not None.
             'NULL', 'NaN', 'n/a', 'nan', 'null']
 
+FNMATCH_PATTERN = '[!.]*'
+
+class Results(list):
+    def __init__(self, specials, data, total):
+        list.__init__(self, [slovar(each) for each in data])
+        self.total = total
+        self.specials = specials
 
 class CSV(object):
 
@@ -99,7 +106,7 @@ class CSV(object):
             for each in chunk:
                 items.append(each)
 
-        return Results(None, specials, items, self.get_total(_limit=-1), 0)
+        return Results(specials, items, self.get_total(_limit=-1))
 
     def get_collection_paged(self, page_size, **params):
         params = slovar(params)
@@ -133,7 +140,8 @@ class CSVBackend(object):
     def ls_ns(cls, ns):
         path = os.path.join(datasets.Settings.get('csv.root'), ns)
         if os.path.isdir(path):
-            return [it for it in os.listdir(os.path.join(datasets.Settings.get('csv.root'), ns))]
+            return fnmatch.filter(os.listdir(os.path.join(datasets.Settings.get('csv.root'), ns)),
+                                    FNMATCH_PATTERN)
 
         raise prf.exc.HTTPBadRequest('%s is not a dir' % ns)
 
@@ -164,6 +172,13 @@ class CSVBackend(object):
             raise prf.exc.HTTPBadRequest('Missing csv root. Pass it in params(csv_root) or in config file(csv.root)')
 
         self.params = params
+        self.transformer = self.get_transformer()
+
+    def get_transformer(self):
+        if self.params.get('transformer'):
+            trans, _, trans_as = self.params.transformer.partition('__as__')
+            return maybe_dotted(trans)(trans_as=trans_as,
+                **datasets.Settings.update_with(self.params.get('settings', {})))
 
     def process_many(self, dataset):
 
@@ -183,6 +198,15 @@ class CSVBackend(object):
         if not self.params.drop and os.path.isfile(file_name) and os.path.getsize(file_name):
             file_opts = 'a+'
             skip_headers = True
+
+        if self.transformer:
+            _dataset = []
+            for data in dataset:
+                for data in self.transformer.pre_save(data):
+                    _dataset.append(data)
+                    break
+
+            dataset = _dataset
 
         with open(file_name, file_opts) as csv_file:
             log.info('Writing csv data to %s' % file_name)

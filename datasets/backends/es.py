@@ -6,6 +6,7 @@ from pprint import pformat
 from slovar import slovar
 from slovar.utils import maybe_dotted
 from prf.es import ES
+from prf.utils import chunks
 
 import datasets
 from datasets.backends.base import Base
@@ -30,8 +31,6 @@ NOT_ANALLYZED = {
 
 
 class ESBackend(Base):
-    # _ROOT_NS = 'ROOT'
-    _buffer = []
     _ES_OP = slovar({
         'create': 'index',
         'update': 'index',
@@ -55,6 +54,16 @@ class ESBackend(Base):
         return ES.api.indices.get_alias(match, ignore_unavailable=True)
 
     @classmethod
+    def get_aliases(cls, match=''):
+        aliases = []
+        for it in cls.get_collections(match).values():
+            if not it['aliases']:
+                continue
+            aliases += it['aliases'].keys()
+
+        return list(set(aliases))
+
+    @classmethod
     def get_namespaces(cls):
         ns = []
         for each in cls.get_collections().keys():
@@ -73,6 +82,8 @@ class ESBackend(Base):
 
     def __init__(self, params, job_log=None):
         self.define_op(params, 'asstr', 'mapping', allow_missing=True)
+        self.define_op(params, 'asint', 'write_buffer_size', default=1000)
+        self.define_op(params, 'asint', 'flush_retries', default=1)
 
         super(ESBackend, self).__init__(params, job_log)
 
@@ -83,6 +94,7 @@ class ESBackend(Base):
             raise ValueError('op params must be supplied')
 
         self.process_mapping()
+        self._buffer = []
 
     def process_mapping(self):
 
@@ -120,36 +132,68 @@ class ESBackend(Base):
 
     def process_many(self, dataset):
         super(ESBackend, self).process_many(dataset)
-        errors = []
+
+        nb_retries = self.params.flush_retries
+
+        def flush(data):
+            success, all_errors = helpers.bulk(ES.api, data, raise_on_error=False, refresh=True)
+            errors = []
+            retries = []
+            retry_data = []
+
+            if all_errors:
+                #separate retriable errors
+                for err in all_errors:
+                    if err['index'].get('status') == 429: #too many requests
+                        retries.append(err['index']['_id'])
+                    else:
+                        errors.append(err)
+
+                    if retries:
+                        for each in data:
+                            if each['_id'] in retries:
+                                retry_data.append(each)
+
+            log.debug('BULK FLUSH: total=%s, success=%s, errors=%s, retries=%s',
+                                    len(data), success, len(errors), len(retry_data))
+            return success, errors, retry_data
+
+        def raise_or_log(data_size, errors):
+            msg = '`%s` out of `%s` documents failed to index\n%s' % (len(errors), data_size, errors)
+            #if more than 1/4 failed, lets raise. clearly something is up !
+            if len(errors) > data_size/4:
+                raise ValueError(msg)
+            else:
+                self.job_logger.error(msg)
 
         try:
-            if not self.params.dry_run:
-                total, errors = helpers.bulk(ES.api, self._buffer,
-                                                raise_on_error=False,
-                                                refresh=True)
+            if self.params.dry_run:
+                return
+
+            for chunk in chunks(self._buffer, self.params.write_buffer_size):
+                success, errors, retries = flush(chunk)
+
+                while(retries and nb_retries):
+                    log.debug('RETRY BULK FLUSH for %s docs', len(retries))
+                    success2, errors2, retries = flush(retries)
+                    success +=success2
+                    errors +=errors2
+                    nb_retries -=1
+
                 if errors:
-                    for err in errors:
-                        self.job_logger.error(pformat(err))
-
-                    msg = '`%s` out of `%s` documents failed to index' % (len(errors), len(self._buffer))
-                    #if more than 1/4 failed, lets raise. clearly something is up !
-                    if len(errors) > len(self._buffer)/4:
-                        raise ValueError(msg)
-                    else:
-                        self.job_logger.error(msg)
-
-            for each in self._buffer:
-                msg = '%s with data:\n%s' % (each['_op_type'].upper(), self.format4logging(data=each))
-
-                if self.params.dry_run:
-                    self.job_logger.warning('DRY RUN:\n'+ msg)
-                else:
-                    self.job_logger.debug(msg)
+                    raise_or_log(len(chunk), errors)
 
         finally:
             self._buffer = []
 
     def build_pk(self, data):
+
+        self.params.pk = self.params.get('pk') or self.params.op_params
+
+        if not self.params.pk:
+            data['id'] = str(ObjectId())
+            return data['id']
+
         if not self.params.get('pk'):
             if self.params.op in ['upsert', 'update', 'delete']:
                 self.params.pk = self.params.op_params
@@ -181,24 +225,23 @@ class ESBackend(Base):
             '_op_type': self._ES_OP[self.params.op]
         })
 
-
         if self.params.op != 'delete':
             #these fields are old meta fields, pop them before adding to buffer
             data.pop_many(action.keys())
             action['_source'] = data
 
         self._buffer.append(action)
-        return action
+        return data
 
     def save(self, obj, data):
-
         if self.params.remove_fields:
             data = data.extract(['-%s'%it for it in self.params.remove_fields])
 
         return self.add_to_buffer(data, self.build_pk(data))
 
     def delete(self, data):
-        self.add_to_buffer({}, getattr(data, self.params.op_params))
+        log.debug('DELETING %s', self.format4logging(data=data.to_dict()))
+        self.add_to_buffer({}, getattr(data, self.params.op_params[0]))
 
     @classmethod
     def index_name(cls, params):
@@ -210,6 +253,10 @@ class ESBackend(Base):
 
         if not ES.api.indices.exists(ds.index):
             index_settings = datasets.Settings.extract('es.index.*')
+
+            if params.get('settings'):
+                index_settings.update(params.settings.extract('es.*'))
+
             log.info('Index settings: %s' % index_settings)
             ES.api.indices.create(ds.index, body=index_settings or None)
 

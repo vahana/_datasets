@@ -2,6 +2,8 @@ import logging
 from pyramid.config import Configurator
 
 from slovar import slovar
+from prf.utils import maybe_dotted
+
 from datasets.backends.http import prf_api
 from datasets.backends.csv import CSVBackend
 from datasets.backends.mongo import MongoBackend
@@ -60,11 +62,23 @@ def drop_namespace(ds):
     if ds.backend == MONGO_BE_NAME:
         return MongoBackend.drop_namespace(ds.ns)
 
-    elif backend == ES_BE_NAME:
+    elif ds.backend == ES_BE_NAME:
         return ESBackend.drop_namespace(ds.ns)
 
     else:
         raise ValueError('Backend `%s` is not supported for dropping' % ds)
+
+
+def get_transformer(params, **tr_args):
+    if params.get('transformer'):
+        trans, _, trans_as = params.transformer.partition('__as__')
+
+        if trans_as:
+            tr_args['trans_as'] = trans_as
+
+        tr_args.update(params.get('transformer_args', {}))
+
+        return maybe_dotted(trans)(**tr_args)
 
 
 def main(global_config, **settings):

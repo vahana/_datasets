@@ -276,7 +276,7 @@ class Base(object):
                 self.diff(data, each_d, self.params.show_diff)
 
             new_data = self.update_object(each_d, data)
-            self._save(each, new_data, meta)
+            self._save(each, new_data, meta, is_new=False)
 
         return update_count
 
@@ -387,7 +387,7 @@ class Base(object):
         return data
 
 
-    def pre_save(self, data, meta, is_new):
+    def pre_save(self, data, meta):
         logs = self.new_logs(data, meta)
 
         if 'fields' in self.params:
@@ -406,10 +406,10 @@ class Base(object):
     def _save(self, obj, data, meta, is_new=False):
         if self.transformer:
             #pre_save returns iterator. we only care about the first item here.
-            for data in self.transformer.pre_save(data):
+            for data in self.transformer.pre_save(data, is_new=is_new):
                 break
 
-        _data = self.pre_save(data, meta, is_new)
+        _data = self.pre_save(data, meta)
 
         if not _data:
             logger.debug('NOTHING TO SAVE')

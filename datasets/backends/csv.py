@@ -20,7 +20,7 @@ NA_LIST = ['', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan',
             # 'NA', #removed this b/c we are using it in `parent` fields as a legit value not None.
             'NULL', 'NaN', 'n/a', 'nan', 'null']
 
-FNMATCH_PATTERN = '[!.]*'
+FNMATCH_PATTERN = '[!.]*.csv'
 
 class Results(list):
     def __init__(self, specials, data, total):
@@ -30,7 +30,8 @@ class Results(list):
 
 class CSV(object):
 
-    def __init__(self, file_name):
+    def __init__(self, ds_name):
+        file_name = ds_name + '.csv'
         if not os.path.isfile(file_name):
             log.error('File does not exist %s' % file_name)
         self.file_name = file_name
@@ -91,7 +92,6 @@ class CSV(object):
                         chunksize = page_size,
                         skip_blank_lines=True,
                         engine = 'c',
-                        dialect = self.sniff(self.file_name),
                         **params)
 
     def get_collection(self, **params):
@@ -140,8 +140,8 @@ class CSVBackend(object):
     def ls_ns(cls, ns):
         path = os.path.join(datasets.Settings.get('csv.root'), ns)
         if os.path.isdir(path):
-            return fnmatch.filter(os.listdir(os.path.join(datasets.Settings.get('csv.root'), ns)),
-                                    FNMATCH_PATTERN)
+            return [it[:-4] for it in fnmatch.filter(os.listdir(os.path.join(datasets.Settings.get('csv.root'), ns)),
+                                    FNMATCH_PATTERN)]
 
         raise prf.exc.HTTPBadRequest('%s is not a dir' % ns)
 
@@ -183,13 +183,12 @@ class CSVBackend(object):
     def process_many(self, dataset):
 
         dir_path = os.path.join(self.params.csv_root, self.params.ns)
-        file_name = os.path.join(self.params.csv_root, self.params.ns, self.params.name)
+        ds_name = os.path.join(self.params.csv_root, self.params.ns, self.params.name)
+
+        file_name = ds_name + '.csv'
 
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
-
-        if not file_name.endswith('csv'):
-            file_name +='.csv'
 
         file_opts = 'w+'
         skip_headers = False

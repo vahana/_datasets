@@ -5,7 +5,6 @@ import urllib3
 from slovar import slovar
 
 import prf
-from prf.utils.csv import dict2tab
 from prf.request import PRFRequest
 
 import datasets

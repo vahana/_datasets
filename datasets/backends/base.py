@@ -6,7 +6,6 @@ import os
 
 from slovar import slovar
 from slovar.strings import split_strip
-from slovar.utils import maybe_dotted
 from prf.utils import typecast, str2dt
 
 import datasets
@@ -146,10 +145,10 @@ class Base(object):
         self.define_op(params, 'asstr',  'backend', allow_missing=True)
         self.define_op(params, 'asstr',  'ns', raise_on_values=[None])
         self.define_op(params, 'aslist', 'pk', allow_missing=True)
+        self.define_op(params, 'asbool', 'skip_timestamp', default=False)
 
         self._operations['query'] = dict
-        self._operations['extra'] = dict
-        self._operations['extra_options'] = dict
+        self._operations['default'] = dict
         self._operations['settings'] = dict
         self._operations['transformer_args'] = dict
 
@@ -185,7 +184,7 @@ class Base(object):
         return slovar(log=log, source=source)
 
     def process(self, data):
-        data = self.add_extra(slovar(data))
+        data = self.add_defaults(slovar(data))
 
         _op = self.params.op
         _op_params = self.params.op_params
@@ -245,15 +244,11 @@ class Base(object):
         logger.debug('CREATED %r', obj)
 
     def get_objects(self, keys, data):
-        for kk in keys:
-            if '.' in kk and not self.params.flatten:
-                self.job_logger.warning('Nested key `%s`? Consider using flatten=1', kk)
-
         _params = self.build_query_params(data, keys)
         if 'query' in self.params:
             _params = _params.update_with(typecast(self.params.query))
 
-        return _params, self.klass.get_collection(**_params)
+        return _params, self.klass.get_collection(**_params.flat())
 
     def update_objects(self, _params, objects, data):
         update_count = len(objects)
@@ -324,23 +319,23 @@ class Base(object):
 
         return '\n'.join(msg)
 
-    def add_extra(self, data):
-        if 'extra' not in self.params:
+    def add_defaults(self, data):
+        if 'default' not in self.params:
             return data
 
-        extra_f = self.params.extra.flat()
+        default_f = self.params.default.flat()
 
-        for k in extra_f:
-            if extra_f[k] == '__gid__':
-                extra_f[k] = str(ObjectId())
-            elif extra_f[k] == '__today__':
-                extra_f[k] = datetime.today()
-            elif extra_f[k] == '__now__':
-                extra_f[k] = datetime.now()
+        for k in default_f:
+            if default_f[k] == '__oid__':
+                default_f[k] = str(ObjectId())
+            elif default_f[k] == '__today__':
+                default_f[k] = datetime.today()
+            elif default_f[k] == '__now__':
+                default_f[k] = datetime.now()
 
-        extra_f = typecast(extra_f)
+        default_f = typecast(default_f)
 
-        return data.flat().update_with(extra_f, overwrite=0).unflat()
+        return data.flat().update_with(default_f, overwrite=0).unflat()
 
     def log_not_found(self, params, data, tags=[], msg=''):
         msg = msg or 'NOT FOUND in <%s> with:\n%s' % (self.klass,
@@ -386,8 +381,10 @@ class Base(object):
                         data.pop(ekey)
         return data
 
+    def build_pk(self, data):
+        pass
 
-    def pre_save(self, data, meta):
+    def pre_save(self, data, meta, is_new):
         logs = self.new_logs(data, meta)
 
         if 'fields' in self.params:
@@ -398,35 +395,43 @@ class Base(object):
         if not data:
             return data
 
-        data['updated_at'] = logs[0].created_at
+        if not self.params.skip_timestamp:
+            if is_new:
+                data['created_at'] = logs[0].created_at
+            else:
+                data.pop('created_at', None)
+                data['updated_at'] = logs[0].created_at
+
         data['logs'] = logs
 
         return data
 
     def _save(self, obj, data, meta, is_new=False):
+        pk = self.build_pk(data)
+
         if self.transformer:
             #pre_save returns iterator. we only care about the first item here.
             for data in self.transformer.pre_save(data, is_new=is_new):
                 break
 
-        _data = self.pre_save(data, meta)
+        _data = self.pre_save(data, meta, is_new)
 
         if not _data:
             logger.debug('NOTHING TO SAVE')
             return
 
         try:
-            _data = self.save(obj, _data)
+            _data = self.save(obj, _data, pk)
             return _data
         finally:
-            msg = 'SAVED (%s) %r with data:\n%s' % (
-                'UPDATE' if not is_new else 'NEW', obj, self.format4logging(data=_data))
+            msg = 'SAVED (%s) %r with PK:%s\nDATA:\n%s' % (
+                'UPDATE' if not is_new else 'NEW', obj, pk, self.format4logging(data=_data))
             if self.params.dry_run:
                 logger.warning('DRY RUN: %s' % msg)
             else:
                 logger.debug(msg)
 
-    def save(self, obj, new_data):
+    def save(self, obj, new_data, pk=None):
         raise NotImplementedError
 
     def build_query_params(self, data, _keys):

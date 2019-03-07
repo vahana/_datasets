@@ -31,12 +31,7 @@ NOT_ANALLYZED = {
 
 
 class ESBackend(Base):
-    _ES_OP = slovar({
-        'create': 'index',
-        'update': 'index',
-        'upsert': 'index',
-        'delete': 'delete',
-    })
+    _ES_OP = ['create', 'index', 'update', 'upsert','delete']
 
     @classmethod
     def get_dataset(cls, ds, define=False):
@@ -211,37 +206,49 @@ class ESBackend(Base):
         if missing:
             raise KeyError('missing data for pk `%s`. got `%s`' % (self.params.pk, pk_data))
 
-        pk = []
-        for kk in sorted(pk_data.keys()):
-            pk.append(str(pk_data[kk]))
+        return pk_data.concat_values(sep=':')
 
-        return ':'.join(pk)
-
-    def add_to_buffer(self, data, _id):
+    def add_to_buffer(self, data, pk):
         action = slovar({
             '_index': self.klass.index,
             '_type': self.params.doc_type,
-            '_id': _id,
-            '_op_type': self._ES_OP[self.params.op]
+            '_id': pk,
         })
 
-        if self.params.op != 'delete':
-            #these fields are old meta fields, pop them before adding to buffer
-            data.pop_many(action.keys())
+        #pop previous action key fields if any
+        data.pop_many(action.keys())
+
+        if self.params.op in ['create', 'index']:
+            # if its create it will fail if document exists. To use this it should be handled in flush.
+            # if its index it will either create or overwrite.
+            action['_op_type'] = 'index'
             action['_source'] = data
+
+        elif self.params.op in ['update', 'upsert']:
+            action['_op_type'] = 'update'
+            action['_retry_on_conflict'] = 3
+            action['doc'] = data
+            if self.params.op == 'upsert':
+                action['doc_as_upsert'] = True
+
+        elif self.params.op == 'delete':
+            action['_op_type'] = 'delete'
+
+        else:
+            raise ValueError('Bad op %s' % self.params.op)
 
         self._buffer.append(action)
         return data
 
-    def save(self, obj, data):
+    def save(self, obj, data, pk):
         if self.params.remove_fields:
             data = data.extract(['-%s'%it for it in self.params.remove_fields])
 
-        return self.add_to_buffer(data, self.build_pk(data))
+        return self.add_to_buffer(data, pk)
 
     def delete(self, data):
         log.debug('DELETING %s', self.format4logging(data=data.to_dict()))
-        self.add_to_buffer({}, getattr(data, self.params.op_params[0]))
+        self.add_to_buffer(slovar(), getattr(data, self.params.op_params[0]))
 
     @classmethod
     def index_name(cls, params):

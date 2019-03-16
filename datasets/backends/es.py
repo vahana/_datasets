@@ -91,6 +91,29 @@ class ESBackend(Base):
         self.process_mapping()
         self._buffer = []
 
+    def log_action(self, data, pk, action):
+        msg = '%s with pk=%s\n%s' % (action.upper(), pk, self.format4logging(data=data))
+        if self.params.dry_run:
+            log.warning('DRY RUN: %s' % msg)
+        else:
+            log.debug(msg)
+
+    def create(self, data):
+        data = self.pre_save(data)
+        self.add_to_buffer(data)
+
+    def update(self, data):
+        data = self.pre_save(data)
+        if self.params.remove_fields:
+            data = data.extract(['-%s'%it for it in self.params.remove_fields])
+        self.add_to_buffer(data)
+
+    def upsert(self, data):
+        self.update(data)
+
+    def delete(self, data):
+        self.add_to_buffer(data)
+
     def process_mapping(self):
 
         def set_default_mapping():
@@ -139,7 +162,8 @@ class ESBackend(Base):
             if all_errors:
                 #separate retriable errors
                 for err in all_errors:
-                    if err['index'].get('status') == 429: #too many requests
+                    err = slovar(err)
+                    if err.fget('index.status') == 429: #too many requests
                         retries.append(err['index']['_id'])
                     else:
                         errors.append(err)
@@ -208,7 +232,10 @@ class ESBackend(Base):
 
         return pk_data.concat_values(sep=':')
 
-    def add_to_buffer(self, data, pk):
+    def add_to_buffer(self, data):
+
+        pk = self.build_pk(data)
+
         action = slovar({
             '_index': self.klass.index,
             '_type': self.params.doc_type,
@@ -238,17 +265,9 @@ class ESBackend(Base):
             raise ValueError('Bad op %s' % self.params.op)
 
         self._buffer.append(action)
+        self.log_action(data, pk, action['_op_type'])
+
         return data
-
-    def save(self, obj, data, pk):
-        if self.params.remove_fields:
-            data = data.extract(['-%s'%it for it in self.params.remove_fields])
-
-        return self.add_to_buffer(data, pk)
-
-    def delete(self, data):
-        log.debug('DELETING %s', self.format4logging(data=data.to_dict()))
-        self.add_to_buffer(slovar(), getattr(data, self.params.op_params[0]))
 
     @classmethod
     def index_name(cls, params):

@@ -7,11 +7,12 @@ import mongoengine as mongo
 from datetime import datetime
 from bson import ObjectId
 import datetime
+from pprint import pformat
 
 from slovar import slovar
 import prf
 from prf.mongodb import DynamicBase, mongo_connect, mongo_disconnect, drop_db
-from prf.utils import maybe_dotted
+from prf.utils import maybe_dotted, typecast, str2dt, to_dunders
 
 import datasets
 
@@ -50,32 +51,138 @@ class MongoBackend(Base):
     def drop_namespace(cls, ns):
         drop_db(ns)
 
-    def save(self, obj, data, pk):
-
-        #this is mostly for the __repr__ to show correct object id field
-        obj._pk_field = self.params.get('pk') or 'id'
-
+    def log_action(self, data, query, action):
+        msg = '%s with query=%s\n%s' % (action.upper(), query, self.format4logging(data=data))
         if self.params.dry_run:
-            return data
+            log.warning('DRY RUN: %s' % msg)
+        else:
+            log.debug(msg)
 
-        #when saving with id, mongoengine will create another object
-        #even if you are trying to update it. so lets pop it.
-        data.pop('id', None)
+    def create(self, data):
+        if 'skip_by' in self.params:
+            _params = self.build_query_params(data, self.params.skip_by)
+            _params['_count'] = 1
+            exists = self.klass.get_collection(**_params)
+            if exists:
+                log.debug('SKIP creation: %s objects exists with: %s', exists, _params)
+                return
 
+        data['original_id'] = data.pop('id', None) # pop the id so mongo creates a new document
+        data = self.pre_save(data)
+
+        obj = self.klass()
         for name, val in list(data.items()):
             setattr(obj, name, val)
 
-        if self.params.remove_fields:
-            for field in self.params.remove_fields:
-                if hasattr(obj, field):
-                    delattr(obj, field)
+        if not self.params.dry_run:
+            if self.params.fail_on_error:
+                obj.save()
+            else:
+                obj.save_safe()
 
-        if self.params.fail_on_error:
-            obj.save()
+        self.log_action(data, None, 'create')
+
+    def update(self, data):
+        params, objects = self.get_objects(self.params.op_params, data)
+
+        if not objects:
+            self.log_action({}, params, 'update')
+            self.log_not_found(params, data)
+            return
+
+        self.update_objects(params, objects, data)
+
+    def upsert(self, data):
+        params, objects = self.get_objects(self.params.op_params, data)
+
+        if objects:
+            #udpate_fields allows to update only partially if data exists
+            if self.params.update_fields:
+                data = data.extract(self.params.update_fields)
+
+            self.update_objects(params, objects, data)
+
         else:
-            obj.save_safe()
+            self.create(data)
+            self.log_action(data, None, 'create')
 
-        return obj.to_dict()
+    def delete(self, data):
+        params, objects = self.get_objects(self.params.op_params, data)
+
+        if not objects:
+            self.log_action({}, params, 'delete')
+            self.log_not_found(params, data)
+            return
+
+        if not self.params.dry_run:
+            objects.delete()
+
+        self.log_action(data, params, 'delete')
+
+    def build_query_params(self, data, _keys):
+        query = slovar()
+
+        for _k in _keys:
+            #unflat if nested
+            if '.' in _k:
+                query.update(typecast(data.extract(_k).flat()))
+            else:
+                query.update(typecast(data.extract(_k)))
+
+        if not query:
+            if not _keys:
+                raise ValueError('empty op params')
+
+            raise ValueError('update query is empty for:\n%s' %
+                             self.format4logging(
+                                query=_keys, data=data))
+
+        query['_limit'] = -1
+        return query
+
+    def get_objects(self, keys, data):
+        _params = self.build_query_params(data, keys)
+        if 'query' in self.params:
+            _params = _params.update_with(typecast(self.params.query))
+
+        return _params, self.klass.get_collection(**_params.flat())
+
+    def update_objects(self, params, objects, data):
+        update_count = len(objects)
+
+        def do_update(obj, data):
+            data = self.pre_save(data)
+            update = to_dunders(data)
+
+            for rf in self.params.remove_fields:
+                update['unset__%s' % rf] = 1
+
+            if not update:
+                log.debug('NOTHING TO UPDATE')
+
+            elif not self.params.dry_run:
+                updated = obj.update(**update)
+
+            self.log_action(update, params, 'update')
+
+        if update_count > 1:
+            msg = 'Multiple (%s) updates for\n%s' % (update_count,
+                                                     self.format4logging(query=params))
+            self.job_logger.warning(msg)
+
+        if self.transformer:
+            actions = self.params.extract(
+                        ['overwrite', 'append_to', 'append_to_set', 'flatten'])
+
+            for each in objects:
+                each_d = each.to_dict()
+                actions = self.transformer.pre_update(data, each_d) or actions
+                log.debug('ACTIONS:\n%s', pformat(actions))
+
+                do_update(each, each_d.update_with(data, **actions))
+        else:
+            do_update(objects, data)
+
 
 def includeme(config):
     datasets.Settings = slovar(config.registry.settings)

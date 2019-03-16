@@ -16,7 +16,11 @@ log = logging.getLogger(__name__)
 Settings = slovar()
 
 def get_ds(name, backend=MONGO_BE_NAME):
-    ns, _, name = name.partition('.')
+    if '.' in name:
+        ns, _, name = name.partition('.')
+    elif '/' in name:
+        ns, _, name = name.partition('/')
+
     return get_dataset(slovar(name=name, ns=ns, backend=backend))
 
 def get_dataset(ds, define=False):

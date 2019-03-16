@@ -2,7 +2,6 @@ import logging
 from bson import ObjectId
 from datetime import datetime
 from pprint import pformat
-import os
 
 from slovar import slovar
 from slovar.strings import split_strip
@@ -116,7 +115,6 @@ class Base(object):
         params = slovar(params)
 
         self.define_op(params, 'asstr',  'name', raise_on_values=['', None])
-        self.define_op(params, 'asbool', 'keep_ids', default=False)
 
         if self.define_op(params, 'asbool', 'overwrite', _raise=False, default=True) is None:
             self.define_op(params, 'aslist', 'overwrite', default=[])
@@ -138,7 +136,6 @@ class Base(object):
         self.define_op(params, 'aslist', 'log_fields', default=[])
         self.define_op(params, 'asbool', 'log_pretty', default=False)
         self.define_op(params, 'asbool', 'fail_on_error', default=True)
-        self.define_op(params, 'aslist', 'show_diff', allow_missing=True)
         self.define_op(params, 'asstr',  'op')
         self.define_op(params, 'aslist', 'skip_by', allow_missing=True)
         self.define_op(params, 'asstr',  'transformer', allow_missing=True)
@@ -146,6 +143,8 @@ class Base(object):
         self.define_op(params, 'asstr',  'ns', raise_on_values=[None])
         self.define_op(params, 'aslist', 'pk', allow_missing=True)
         self.define_op(params, 'asbool', 'skip_timestamp', default=False)
+        self.define_op(params, 'asbool', 'update_many', default=False)
+
 
         self._operations['query'] = dict
         self._operations['default'] = dict
@@ -193,116 +192,28 @@ class Base(object):
             raise ValueError('missing op params for `%s` operation' % _op)
 
         if _op == 'create':
-            self.create(data)
+            return self.create(data)
 
         elif _op == 'update':
-            params, objects = self.get_objects(_op_params, data)
-            if not objects:
-                self.log_not_found(params, data)
-                return
-
-            self.update_objects(params, objects, data)
+            return self.update(data)
 
         elif _op == 'upsert':
-            params, objects = self.get_objects(_op_params, data)
-            if objects:
-                #udpate_fields allows to update only partially if data exists
-                if self.params.update_fields:
-                    data = data.extract(self.params.update_fields)
-
-                self.update_objects(params, objects, data)
-            else:
-                self.create(data)
+            return self.upsert(data)
 
         elif _op == 'delete':
-            params, objects = self.get_objects(_op_params, data)
-            if not objects:
-                self.log_not_found(params, data)
-                return
-
-            for obj in objects:
-                self.delete(obj)
+            return self.delete(data)
 
         else:
             raise KeyError(
                 'Must provide `op` param. e.g. op=update:key1,key2')
 
-    def create(self, data):
-        if 'skip_by' in self.params:
-            _params = self.build_query_params(data, self.params.skip_by)
-            _params['_count'] = 1
-            exists = self.klass.get_collection(**_params)
-            if exists:
-                logger.debug('SKIP creation: %s objects exists with: %s', exists, _params)
-                return
-
-        if 'id' in data and not self.params.keep_ids and 'original_id' not in data:
-            data['original_id'] = data.pop('id', None)
-
-        obj = self.klass()
-        self._save(obj, data, self.extract_meta(data), is_new=True)
-        logger.debug('CREATED %r', obj)
-
-    def get_objects(self, keys, data):
-        _params = self.build_query_params(data, keys)
-        if 'query' in self.params:
-            _params = _params.update_with(typecast(self.params.query))
-
-        return _params, self.klass.get_collection(**_params.flat())
-
-    def update_objects(self, _params, objects, data):
-        update_count = len(objects)
-
-        if update_count > 1:
-            msg = 'Multiple (%s) updates for\n%s' % (update_count,
-                                                     self.format4logging(query=_params))
-            self.job_logger.warning(msg)
-
-        if not self.params.keep_source_logs:
-            #pop the source logs so it does not overwrite the target's
-            data.pop('logs', [])
-
-        meta = self.extract_meta(data)
-
-        for each in objects:
-            each_d = each.to_dict()
-
-            if 'show_diff' in self.params:
-                self.diff(data, each_d, self.params.show_diff)
-
-            new_data = self.update_object(each_d, data)
-            self._save(each, new_data, meta, is_new=False)
-
-        return update_count
-
-    def update_object(self, data, new_data):
-
-        actions = self.params.extract(
-                    ['overwrite', 'append_to', 'append_to_set', 'flatten'])
-
-        if self.transformer:
-            actions = self.transformer.pre_update(new_data, data) or actions
-            logger.debug('ACTIONS:\n%s', pformat(actions))
-
-        return data.update_with(new_data, **actions)
-
-    def delete(self, obj):
-        _d = obj.to_dict()
-
-        try:
-            if self.params.dry_run:
-                logger.warning('DRY RUN')
-                return _d
-
-            obj.delete()
-        finally:
-            logger.debug('DELETED %r with data:\n%s', obj,
-                                self.format4logging(data=_d))
-
     def format4logging(self, query=None, data=None):
 
         msg = []
-        data_tmpl = 'DATA dict: %%.%ss' % self.params.log_size
+        if self.params.dry_run:
+            data_tmpl = 'DATA dict: %ss'
+        else:
+            data_tmpl = 'DATA dict: %%.%ss' % self.params.log_size
 
         if query:
             msg.append('QUERY: `%s`' % query)
@@ -381,10 +292,15 @@ class Base(object):
                         data.pop(ekey)
         return data
 
-    def build_pk(self, data):
-        pass
+    def pre_save(self, data):
+        is_new = self.params.op == 'create'
+        meta = self.extract_meta(data)
 
-    def pre_save(self, data, meta, is_new):
+        if self.transformer:
+            #pre_save returns iterator. we only care about the first item here.
+            for data in self.transformer.pre_save(data, is_new=is_new):
+                break
+
         logs = self.new_logs(data, meta)
 
         if 'fields' in self.params:
@@ -406,58 +322,3 @@ class Base(object):
 
         return data
 
-    def _save(self, obj, data, meta, is_new=False):
-        pk = self.build_pk(data)
-
-        if self.transformer:
-            #pre_save returns iterator. we only care about the first item here.
-            for data in self.transformer.pre_save(data, is_new=is_new):
-                break
-
-        _data = self.pre_save(data, meta, is_new)
-
-        if not _data:
-            logger.debug('NOTHING TO SAVE')
-            return
-
-        try:
-            _data = self.save(obj, _data, pk)
-            return _data
-        finally:
-            msg = 'SAVED (%s) %r with PK:%s\nDATA:\n%s' % (
-                'UPDATE' if not is_new else 'NEW', obj, pk, self.format4logging(data=_data))
-            if self.params.dry_run:
-                logger.warning('DRY RUN: %s' % msg)
-            else:
-                logger.debug(msg)
-
-    def save(self, obj, new_data, pk=None):
-        raise NotImplementedError
-
-    def build_query_params(self, data, _keys):
-        query = slovar()
-
-        for _k in _keys:
-            #unflat if nested
-            if '.' in _k:
-                query.update(typecast(data.extract(_k).flat()))
-            else:
-                query.update(typecast(data.extract(_k)))
-
-        if not query:
-            if not _keys:
-                raise ValueError('empty op params')
-
-            raise ValueError('update query is empty for:\n%s' %
-                             self.format4logging(
-                                query=_keys, data=data))
-
-        query['_limit'] = -1
-        return query
-
-    def diff(self, d1, d2, keys=[]):
-        _diff = d1.extract(keys).diff(d2.extract(keys))
-        if _diff:
-            logger.info('DIFF:\n%s\n\n', self.format4logging(data=_diff))
-        else:
-            logger.info('DIFF: Identical')

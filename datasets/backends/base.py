@@ -195,6 +195,10 @@ class Base(object):
             return self.create(data)
 
         elif _op == 'update':
+            #TODO not sure why we extract source data keys to do remove.
+            # if self.params.remove_fields:
+                # self.params.remove_fields = data.extract(self.params.remove_fields).keys()
+
             return self.update(data)
 
         elif _op == 'upsert':
@@ -245,8 +249,14 @@ class Base(object):
                 default_f[k] = datetime.now()
 
         default_f = typecast(default_f)
+        data_f = data.flat()
 
-        return data.flat().update_with(default_f, overwrite=0).unflat()
+        dkeys = default_f.key_diff(data_f.keys())
+        if dkeys:
+            logger.debug('DEFAULT values for %s:\n %s', dkeys, pformat(default_f.extract(dkeys)))
+
+        return data_f.update_with(default_f, overwrite=0).unflat()
+
 
     def log_not_found(self, params, data, tags=[], msg=''):
         msg = msg or 'NOT FOUND in <%s> with:\n%s' % (self.klass,

@@ -103,10 +103,13 @@ class ESBackend(Base):
         self.add_to_buffer(data)
 
     def update(self, data):
+        pk = self.build_pk(data)
         data = self.pre_save(data)
+
         if self.params.remove_fields:
             data = data.extract(['-%s'%it for it in self.params.remove_fields])
-        self.add_to_buffer(data)
+
+        self.add_to_buffer(data, pk=pk)
 
     def upsert(self, data):
         self.update(data)
@@ -206,7 +209,6 @@ class ESBackend(Base):
             self._buffer = []
 
     def build_pk(self, data):
-
         self.params.pk = self.params.get('pk') or self.params.op_params
 
         if not self.params.pk:
@@ -220,21 +222,21 @@ class ESBackend(Base):
                 data['id'] = str(ObjectId())
                 return data['id']
 
-        if len(self.params.pk) == 1:
-            pk = self.params.pk[0]
-            return data.flat()[pk]
+        # if len(self.params.pk) == 1:
+        #     pk = self.params.pk[0]
+        #     return data.flat()[pk]
 
         pk_data = data.extract(self.params.pk).flat()
 
-        missing = set(self.params.pk) - set(pk_data.keys())
-        if missing:
-            raise KeyError('missing data for pk `%s`. got `%s`' % (self.params.pk, pk_data))
+        if not pk_data:
+            raise KeyError('missing data for pk `%s`' % (self.params.pk))
 
         return pk_data.concat_values(sep=':')
 
-    def add_to_buffer(self, data):
+    def add_to_buffer(self, data, pk=None):
 
-        pk = self.build_pk(data)
+        if not pk:
+            pk = self.build_pk(data)
 
         action = slovar({
             '_index': self.klass.index,

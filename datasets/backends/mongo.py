@@ -152,6 +152,7 @@ class MongoBackend(Base):
 
         def do_update(obj, data):
             data = self.pre_save(data)
+            data.pop('id', None);data.pop('_id', None)
             update = to_dunders(data)
 
             for rf in self.params.remove_fields:
@@ -170,14 +171,16 @@ class MongoBackend(Base):
                                                      self.format4logging(query=params))
             self.job_logger.warning(msg)
 
-        if self.transformer:
-            actions = self.params.extract(
-                        ['overwrite', 'append_to', 'append_to_set', 'flatten'])
 
+        actions = self.params.extract(
+                    ['overwrite', 'append_to', 'append_to_set', 'flatten'])
+
+        if actions or self.transformer:
             for each in objects:
                 each_d = each.to_dict()
-                actions = self.transformer.pre_update(data, each_d) or actions
-                log.debug('ACTIONS:\n%s', pformat(actions))
+                if self.transformer:
+                    actions = self.transformer.pre_update(data, each_d) or actions
+                    log.debug('ACTIONS:\n%s', pformat(actions))
 
                 do_update(each, each_d.update_with(data, **actions))
         else:

@@ -3,6 +3,7 @@ from pyramid.config import Configurator
 
 from slovar import slovar
 from prf.utils import maybe_dotted
+from prf.utils import TODAY
 
 from datasets.backends.http import prf_api
 from datasets.backends.csv import CSVBackend
@@ -15,13 +16,44 @@ from datasets.backends import ES_BE_NAME, MONGO_BE_NAME, CSV_BE_NAME
 log = logging.getLogger(__name__)
 Settings = slovar()
 
-def get_ds(name, backend=MONGO_BE_NAME):
-    if '.' in name:
-        ns, _, name = name.partition('.')
-    elif '/' in name:
-        ns, _, name = name.partition('/')
+def parse_ds(name):
+    if not name:
+        return {}
 
-    return get_dataset(slovar(name=name, ns=ns, backend=backend))
+    if '%TODAY%' in name:
+        name = name.replace('%TODAY%', TODAY())
+
+    if not name:
+        return slovar()
+
+    params = slovar()
+    parts = name.split('.')
+
+    if parts[0] in ['mongo', 'es']:
+        params.backend = parts.pop(0)
+    else:
+        params.backend = 'mongo'
+
+    if parts:
+        params.ns = parts.pop(0)
+        if parts:
+            params.name = parts[0]
+        elif params.backend == 'es':
+            params.name = params.ns
+            params.ns = ''
+
+    if params.backend == 'es':
+        params.name = params.name.lower()
+
+    elif params.backend == 'mongo':
+        if not params.ns:
+            raise ValueError('missing mongo collection name')
+
+    return params
+
+
+def get_ds(name):
+    return get_dataset(parse_ds(name))
 
 def get_dataset(ds, define=False):
     ds.setdefault('backend', MONGO_BE_NAME)

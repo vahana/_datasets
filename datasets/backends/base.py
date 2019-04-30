@@ -215,7 +215,7 @@ class Base(object):
 
         msg = []
         if self.params.dry_run:
-            data_tmpl = 'DATA dict: %ss'
+            data_tmpl = 'DATA dict: %s'
         else:
             data_tmpl = 'DATA dict: %%.%ss' % self.params.log_size
 

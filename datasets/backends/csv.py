@@ -22,6 +22,13 @@ NA_LIST = ['', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan',
 
 FNMATCH_PATTERN = '[!.]*.csv'
 
+class field_processor:
+    def __init__(self, fields):
+        self.fields = fields
+
+    def __call__(self, data):
+        return data.extract(self.fields)
+
 class Results(list):
     def __init__(self, specials, data, total):
         list.__init__(self, [slovar(each) for each in data])
@@ -57,8 +64,9 @@ class CSV(object):
             n_dict = slovar()
 
             def _n(text):
+                text = text.strip()
                 unders = ' ,\n'
-                removes = '.()/'
+                removes = '()/'
 
                 clean = ''
                 for ch in text:
@@ -209,7 +217,8 @@ class CSVBackend(object):
 
         with open(file_name, file_opts) as csv_file:
             log.info('Writing csv data to %s' % file_name)
-            csv_data = dict2tab(dataset, self.params.fields, 'csv', skip_headers, processor=self.params.get('processor'))
+            csv_data = dict2tab(dataset, self.params.fields, 'csv', skip_headers,
+                            processor=self.params.get('processor', field_processor(self.params.fields)))
             csv_file.write(csv_data)
             log.info('Done')
 

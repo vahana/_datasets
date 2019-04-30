@@ -157,7 +157,8 @@ class ESBackend(Base):
         nb_retries = self.params.flush_retries
 
         def flush(data):
-            success, all_errors = helpers.bulk(ES.api, data, raise_on_error=False, refresh=True)
+            success, all_errors = helpers.bulk(ES.api, data, raise_on_error=False,
+                                                    raise_on_exception=False, refresh=True)
             errors = []
             retries = []
             retry_data = []
@@ -181,9 +182,12 @@ class ESBackend(Base):
             return success, errors, retry_data
 
         def raise_or_log(data_size, errors):
+            if not self.params.fail_on_error:
+                self.job_logger.warning('`fail_on_error` is turn off')
+
             msg = '`%s` out of `%s` documents failed to index\n%s' % (len(errors), data_size, errors)
             #if more than 1/4 failed, lets raise. clearly something is up !
-            if len(errors) > data_size/4:
+            if len(errors) > data_size/4 and self.params.fail_on_error:
                 raise ValueError(msg)
             else:
                 self.job_logger.error(msg)

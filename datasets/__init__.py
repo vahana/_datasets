@@ -9,8 +9,9 @@ from datasets.backends.http import prf_api
 from datasets.backends.csv import CSVBackend
 from datasets.backends.mongo import MongoBackend
 from datasets.backends.es import ESBackend
+from datasets.backends.s3 import S3Backend
 
-from datasets.backends import ES_BE_NAME, MONGO_BE_NAME, CSV_BE_NAME
+from datasets.backends import ES_BE_NAME, MONGO_BE_NAME, CSV_BE_NAME, S3_BE_NAME
 
 
 log = logging.getLogger(__name__)
@@ -70,6 +71,9 @@ def get_dataset(ds, define=False):
     elif ds.get('backend') == CSV_BE_NAME:
         return CSVBackend.get_dataset(ds)
 
+    elif ds.get('backend') == S3_BE_NAME:
+        return S3Backend.get_dataset(ds)
+
     else:
         raise ValueError('Unknown backend in `%s`' % ds)
 
@@ -77,7 +81,7 @@ def get_dataset_meta(ds):
     if ds.backend == MONGO_BE_NAME:
         return MongoBackend.get_meta(ds.ns, ds.name)
 
-    elif backend == ES_BE_NAME:
+    elif ds.backend == ES_BE_NAME:
         return ESBackend.get_meta(ds.ns, ds.name)
 
     else:
@@ -87,7 +91,7 @@ def drop_dataset(ds):
     if ds.backend == MONGO_BE_NAME:
         return MongoBackend.drop_dataset(ds)
 
-    elif backend == ES_BE_NAME:
+    elif ds.backend == ES_BE_NAME:
         return ESBackend.drop_index(ds)
 
     else:

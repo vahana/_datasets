@@ -8,12 +8,10 @@ from slovar.strings import split_strip
 from prf.utils import typecast, str2dt
 
 import datasets
+from prf.es import ES
+from prf.utils import chunks
 
 logger = logging.getLogger(__name__)
-
-
-from prf.es import ES
-from elasticsearch import helpers
 
 class JobLoggingHandler(logging.Handler):
     __LOGGING_FILTER_FIELDS = ['msecs',
@@ -33,6 +31,7 @@ class JobLoggingHandler(logging.Handler):
         self._index_name = 'job_logs.job_%s' % job.job.uid
 
     def flush(self):
+        from elasticsearch import helpers
         if self._buffer:
             actions = (
                 {
@@ -112,7 +111,7 @@ class Base(object):
             raise KeyError('Invalid operations %s' % list(invalid_ops))
 
     def __init__(self, params, job_log=None):
-        params = slovar(params)
+        params = slovar.to(params)
 
         self.define_op(params, 'asstr',  'name', raise_on_values=['', None])
 
@@ -127,6 +126,7 @@ class Base(object):
 
         self.define_op(params, 'aslist', 'append_to', default=[])
         self.define_op(params, 'aslist', 'append_to_set', default=[])
+        self.define_op(params, 'aslist', 'merge_to', default=[])
         self.define_op(params, 'aslist', 'fields', allow_missing=True)
         self.define_op(params, 'aslist', 'remove_fields', default=[])
         self.define_op(params, 'aslist', 'update_fields', default=[])
@@ -138,27 +138,28 @@ class Base(object):
         self.define_op(params, 'asbool', 'fail_on_error', default=True)
         self.define_op(params, 'asstr',  'op')
         self.define_op(params, 'aslist', 'skip_by', allow_missing=True)
-        self.define_op(params, 'asstr',  'transformer', allow_missing=True)
         self.define_op(params, 'asstr',  'backend', allow_missing=True)
         self.define_op(params, 'asstr',  'ns', raise_on_values=[None])
         self.define_op(params, 'aslist', 'pk', allow_missing=True)
         self.define_op(params, 'asbool', 'skip_timestamp', default=False)
-        self.define_op(params, 'asbool', 'update_many', default=False)
+        self.define_op(params, 'asbool', 'verbose_logging', default=False)
+
+        self.define_op(params, 'asint', 'write_buffer_size', default=1000)
+        self.define_op(params, 'asint', 'flush_retries', default=1)
 
 
         self._operations['query'] = dict
         self._operations['default'] = dict
         self._operations['settings'] = dict
-        self._operations['transformer_args'] = dict
 
         self.validate_ops(params)
 
         params.op, _, params.op_params = params.op.partition(':')
         params.aslist('op_params', default=[])
-
-        self.klass = datasets.get_dataset(params, define=True)
-
+        params.is_insert = params.op == 'create' and params.get('skip_by')
         self.params = params
+
+        self.klass = datasets.get_dataset(self.params, define=True)
         self.job_log = job_log or slovar()
 
         self.job_logger = self.setup_job_logger(self.job_log)
@@ -168,22 +169,51 @@ class Base(object):
                 if '.' in kk:
                     self.job_logger.warning('`%s` for append_to/appent_to_set is nested but `flatten` is not set', kk)
 
-        self.transformer = datasets.get_transformer(params)
+        self._buffer = []
 
     def process_many(self, dataset):
         for data in dataset:
-            self.process(data)
+            self.process(slovar.to(data))
+
+        nb_retries = self.params.flush_retries
+        try:
+            if self.params.dry_run:
+                return
+
+            for chunk in chunks(self._buffer, self.params.write_buffer_size):
+                success, errors, retries = self.flush(chunk)
+
+                while(retries and nb_retries):
+                    log.debug('RETRY BULK FLUSH for %s docs', len(retries))
+                    success2, errors2, retries = self.flush(retries)
+                    success +=success2
+                    errors +=errors2
+                    nb_retries -=1
+
+                if errors:
+                    self.raise_or_log(len(chunk), errors)
+
+        finally:
+            self._buffer = []
+
+    def raise_or_log(self, data_size, errors):
+        msg = '`%s` out of `%s` documents failed to index\n%.1024s' % (len(errors), data_size, errors)
+        if self.params.fail_on_error:
+            raise ValueError(msg)
+        else:
+            self.job_logger.error(msg)
+
 
     def extract_log(self, data):
-        return slovar(data.pop('log', {})).update_with(self.job_log)
+        return slovar.to(data.pop('log', {})).update_with(self.job_log)
 
     def extract_meta(self, data):
         log = self.extract_log(data)
         source = data.get('source', {})
-        return slovar(log=log, source=source)
+        return dict(log=log, source=source)
 
     def process(self, data):
-        data = self.add_defaults(slovar(data))
+        data = self.add_defaults(data)
 
         _op = self.params.op
         _op_params = self.params.op_params
@@ -212,6 +242,9 @@ class Base(object):
                 'Must provide `op` param. e.g. op=update:key1,key2')
 
     def format4logging(self, query=None, data=None):
+        if not self.params.verbose_logging:
+            return '\nQUERY: %s\nDATA KEYS: %s\nDATA: %s' % (
+                                    query, data.keys(), data.get('id'))
 
         msg = []
         if self.params.dry_run:
@@ -222,7 +255,7 @@ class Base(object):
         if query:
             msg.append('QUERY: `%s`' % query)
         if data:
-            _data = slovar(data).extract(self.params.log_fields)
+            _data = slovar.to(data).extract(self.params.log_fields)
             _fields = list(data.keys())
             if self.params.log_pretty:
                 _data = pformat(_data)
@@ -235,7 +268,7 @@ class Base(object):
         return '\n'.join(msg)
 
     def add_defaults(self, data):
-        if 'default' not in self.params:
+        if not self.params.get('default'):
             return data
 
         default_f = self.params.default.flat()
@@ -249,7 +282,7 @@ class Base(object):
                 default_f[k] = datetime.now()
 
         default_f = typecast(default_f)
-        data_f = data.flat()
+        data_f = slovar.to(data).flat()
 
         dkeys = default_f.key_diff(data_f.keys())
         if dkeys:
@@ -272,7 +305,7 @@ class Base(object):
             raise ValueError(
                 '`logs` field suppose to be a `list` type, got %s instead.\nlogs=%s' % (type(logs), logs))
 
-        logs.insert(0, meta.log)
+        logs.insert(0, meta.get('log'))
 
         #TODO: remove this at some point when all logs are converted to dict
         #check the very first log item
@@ -285,7 +318,7 @@ class Base(object):
         for each in logs:
             #old format `source` was just a string
             if isinstance(each.source, str):
-                each.update(slovar(each).extract(
+                each.update(slovar.to(each).extract(
                     'source__as__source.name,target__as__target.name,merger__as__merger.name'))
 
             new_logs.append(each)
@@ -306,29 +339,22 @@ class Base(object):
         is_new = self.params.op == 'create'
         meta = self.extract_meta(data)
 
-        if self.transformer:
-            #pre_save returns iterator. we only care about the first item here.
-            for data in self.transformer.pre_save(data, is_new=is_new):
-                break
-
         logs = self.new_logs(data, meta)
-
-        if 'fields' in self.params:
-            data = typecast(data.extract(self.params.fields))
-
         data = self.process_empty(data)
 
         if not data:
             return data
 
+        data['logs'] = logs
+
+        if 'fields' in self.params:
+            data = typecast(data.extract(self.params.fields))
+
         if not self.params.skip_timestamp:
             if is_new:
                 data['created_at'] = logs[0].created_at
-            else:
-                data.pop('created_at', None)
-                data['updated_at'] = logs[0].created_at
 
-        data['logs'] = logs
+            data['updated_at'] = logs[0].created_at
 
         return data
 

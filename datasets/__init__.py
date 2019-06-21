@@ -103,7 +103,7 @@ def drop_namespace(ds):
         return MongoBackend.drop_namespace(ds.ns)
 
     elif ds.backend == ES_BE_NAME:
-        return ESBackend.drop_namespace(ds.ns)
+        return ESBackend.drop_index(ds.ns)
 
     else:
         raise ValueError('Backend `%s` is not supported for dropping' % ds)

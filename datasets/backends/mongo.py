@@ -23,6 +23,7 @@ from datasets.backends.base import Base
 
 
 class MongoBackend(Base):
+
     @classmethod
     def get_dataset(cls, ds, define=False):
 
@@ -58,28 +59,69 @@ class MongoBackend(Base):
         else:
             log.debug(msg)
 
-    def create(self, data):
-        if 'skip_by' in self.params:
-            _params = self.build_query_params(data, self.params.skip_by)
-            _params['_count'] = 1
-            exists = self.klass.get_collection(**_params)
-            if exists:
-                log.debug('SKIP creation: %s objects exists with: %s', exists, _params)
-                return
-
-        data['original_id'] = data.pop('id', None) # pop the id so mongo creates a new document
-        data = self.pre_save(data)
-
+    def add_to_buffer(self, data):
         obj = self.klass()
+
         for name, val in list(data.items()):
             setattr(obj, name, val)
 
+        self._buffer.append(obj)
+        return obj
+
+    def flush(self, objs):
+        success, errors = self.klass.insert_many(objs, fail_on_error=False)
+        log.debug('BULK FLUSH: total=%s, success=%s, errors=%s, retries=%s',
+                                            len(objs), success, len(errors), 0)
+
+        return success, errors, 0
+
+    def raise_or_log(self, data_size, errors):
+
+        def sort_by_status():
+            errors_by_status = slovar()
+            for each in errors:
+                try:
+                    errors_by_status.add_to_list(each['code'], each)
+                except KeyError:
+                    errors_by_status.add_to_list('unknown', each)
+
+            return errors_by_status
+
+        errors_by_status = sort_by_status()
+
+        if not self.params.fail_on_error:
+            self.job_logger.warning('`fail_on_error` is turned off !')
+
+        if self.params.is_insert:
+            log.debug('SKIP creation: %s documents already exist.',
+                        len(errors_by_status.pop(11000, [])))
+
+        for status, errors in errors_by_status.items():
+            msg = '`%s` out of `%s` documents failed to index\n%.1024s' % (len(errors), data_size, errors)
+            if self.params.fail_on_error:
+                raise ValueError(msg)
+            else:
+                self.job_logger.error(msg)
+
+    def do_save(self, obj):
         if not self.params.dry_run:
             if self.params.fail_on_error:
-                obj.save()
+                obj.save(_dont_fail_on_duplicate=self.params.is_insert)
             else:
                 obj.save_safe()
 
+    def create(self, data):
+        # if 'skip_by' in self.params:
+        #     _params = self.build_query_params(data, self.params.skip_by)
+        #     _params['_count'] = 1
+        #     exists = self.klass.get_collection(**_params)
+        #     if exists:
+        #         log.debug('SKIP creation: %s objects exists with: %s', exists, _params)
+        #         return
+
+        data['original_id'] = data.pop('id', None) # pop the id so mongo creates a new document
+        data = self.pre_save(data)
+        self.add_to_buffer(data)
         self.log_action(data, None, 'create')
 
     def update(self, data):
@@ -96,12 +138,7 @@ class MongoBackend(Base):
         params, objects = self.get_objects(self.params.op_params, data)
 
         if objects:
-            #udpate_fields allows to update only partially if data exists
-            if self.params.update_fields:
-                data = data.extract(self.params.update_fields)
-
             self.update_objects(params, objects, data)
-
         else:
             self.create(data)
             self.log_action(data, None, 'create')
@@ -148,20 +185,30 @@ class MongoBackend(Base):
         return _params, self.klass.get_collection(**_params.flat())
 
     def update_objects(self, params, objects, data):
+
         update_count = len(objects)
 
         def do_update(obj, data):
             data = self.pre_save(data)
             data.pop('id', None);data.pop('_id', None)
-            update = to_dunders(data)
+
+            #udpate_fields allows to update only partially if data exists in cases of upsert
+            if self.params.update_fields:
+                data = data.extract(self.params.update_fields).flat()
+
+            if not data:
+                log.debug('NOTHING TO UPDATE')
+                return
+
+            update = slovar()
 
             for rf in self.params.remove_fields:
+                data.pop(rf, None) # make sure we dont `set__` this field
                 update['unset__%s' % rf] = 1
 
-            if not update:
-                log.debug('NOTHING TO UPDATE')
+            update.update(to_dunders(data))
 
-            elif not self.params.dry_run:
+            if not self.params.dry_run:
                 updated = obj.update(**update)
 
             self.log_action(update, params, 'update')
@@ -171,18 +218,12 @@ class MongoBackend(Base):
                                                      self.format4logging(query=params))
             self.job_logger.warning(msg)
 
-
         actions = self.params.extract(
-                    ['overwrite', 'append_to', 'append_to_set', 'flatten'])
+                    ['overwrite', 'append_to', 'append_to_set', 'merge_to', 'flatten'])
 
-        if actions or self.transformer:
+        if actions:
             for each in objects:
-                each_d = each.to_dict()
-                if self.transformer:
-                    actions = self.transformer.pre_update(data, each_d) or actions
-                    log.debug('ACTIONS:\n%s', pformat(actions))
-
-                do_update(each, each_d.update_with(data, **actions))
+                do_update(each, slovar.to(each.to_dict()).update_with(data, **actions))
         else:
             do_update(objects, data)
 

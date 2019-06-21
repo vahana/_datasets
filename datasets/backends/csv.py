@@ -27,7 +27,7 @@ class field_processor:
         self.fields = fields
 
     def __call__(self, data):
-        return data.extract(self.fields)
+        return data.extract(self.fields).flat(keep_lists=False)
 
 class Results(list):
     def __init__(self, specials, data, total):

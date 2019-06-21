@@ -1,28 +1,13 @@
 import logging
 import os
-import pandas as pd
-import csv
-import fnmatch
 import boto3
 
-from slovar import slovar
-
 import prf
-
-from prf.utils.utils import maybe_dotted, parse_specials
-from prf.utils.csv import dict2tab
 import datasets
 from datasets.backends.base import Base
 from datasets.backends.csv import CSV
 
 log = logging.getLogger(__name__)
-
-NA_LIST = ['', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan',
-            '1.#IND', '1.#QNAN', 'N/A',
-            # 'NA', #removed this b/c we are using it in `parent` fields as a legit value not None.
-            'NULL', 'NaN', 'n/a', 'nan', 'null']
-
-FNMATCH_PATTERN = '[!.]*.csv'
 
 
 def Bucket(name=None):

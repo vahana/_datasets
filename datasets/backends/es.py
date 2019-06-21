@@ -31,14 +31,14 @@ NOT_ANALLYZED = {
 
 
 class ESBackend(Base):
-    _ES_OP = ['create', 'index', 'update', 'upsert','delete']
+    _ES_OP = ['create', 'update', 'upsert', 'delete']
 
     @classmethod
     def get_dataset(cls, ds, define=False):
         ds = cls.process_ds(ds)
 
         if ds.ns:
-            name = '%s.%s' % (ds.ns, ds.name)
+            name = '%s.%s' % (ds.ns, ds.name or '*')
         else:
             name = ds.name
 
@@ -71,14 +71,8 @@ class ESBackend(Base):
     def get_root_collections(cls):
         return [it for it in ESBackend.get_collections() if '.' not in it]
 
-    @classmethod
-    def get_meta(cls, ns, name):
-        return ES(name).get_meta()
-
     def __init__(self, params, job_log=None):
         self.define_op(params, 'asstr', 'mapping', allow_missing=True)
-        self.define_op(params, 'asint', 'write_buffer_size', default=1000)
-        self.define_op(params, 'asint', 'flush_retries', default=1)
 
         super(ESBackend, self).__init__(params, job_log)
 
@@ -89,7 +83,6 @@ class ESBackend(Base):
             raise ValueError('op params must be supplied')
 
         self.process_mapping()
-        self._buffer = []
 
     def log_action(self, data, pk, action):
         msg = '%s with pk=%s\n%s' % (action.upper(), pk, self.format4logging(data=data))
@@ -97,6 +90,13 @@ class ESBackend(Base):
             log.warning('DRY RUN: %s' % msg)
         else:
             log.debug(msg)
+
+    def pre_save(self, data):
+        #clean ES metadata fields
+        data.pop('_id', None)
+        data.pop('_index', None)
+        data.pop('_type', None)
+        return super().pre_save(data)
 
     def create(self, data):
         data = self.pre_save(data)
@@ -151,66 +151,58 @@ class ESBackend(Base):
         ES.api.cluster.put_settings(body={
             'transient':{'indices.store.throttle.type' : 'none'}})
 
-    def process_many(self, dataset):
-        super(ESBackend, self).process_many(dataset)
+    def flush(self, data):
+        success, all_errors = helpers.bulk(ES.api, data, raise_on_error=False,
+                                                raise_on_exception=False, refresh=True)
+        errors = []
+        retries = []
+        retry_data = []
 
-        nb_retries = self.params.flush_retries
+        if all_errors:
+            #separate retriable errors
+            for err in all_errors:
+                err = slovar(err)
+                if err.fget('index.status') == 429: #too many requests
+                    retries.append(err['index']['_id'])
+                else:
+                    errors.append(err)
 
-        def flush(data):
-            success, all_errors = helpers.bulk(ES.api, data, raise_on_error=False,
-                                                    raise_on_exception=False, refresh=True)
-            errors = []
-            retries = []
-            retry_data = []
+                if retries:
+                    for each in data:
+                        if each['_id'] in retries:
+                            retry_data.append(each)
 
-            if all_errors:
-                #separate retriable errors
-                for err in all_errors:
-                    err = slovar(err)
-                    if err.fget('index.status') == 429: #too many requests
-                        retries.append(err['index']['_id'])
-                    else:
-                        errors.append(err)
+        log.debug('BULK FLUSH: total=%s, success=%s, errors=%s, retries=%s',
+                                len(data), success, len(errors), len(retry_data))
+        return success, errors, retry_data
 
-                    if retries:
-                        for each in data:
-                            if each['_id'] in retries:
-                                retry_data.append(each)
+    def raise_or_log(self, data_size, errors):
 
-            log.debug('BULK FLUSH: total=%s, success=%s, errors=%s, retries=%s',
-                                    len(data), success, len(errors), len(retry_data))
-            return success, errors, retry_data
+        def sort_by_status():
+            errors_by_status = slovar()
+            for each in errors:
+                try:
+                    errors_by_status.add_to_list(each['create']['status'], each)
+                except KeyError:
+                    errors_by_status.add_to_list('unknown', each)
 
-        def raise_or_log(data_size, errors):
-            if not self.params.fail_on_error:
-                self.job_logger.warning('`fail_on_error` is turn off')
+            return errors_by_status
 
-            msg = '`%s` out of `%s` documents failed to index\n%s' % (len(errors), data_size, errors)
-            #if more than 1/4 failed, lets raise. clearly something is up !
-            if len(errors) > data_size/4 and self.params.fail_on_error:
+        errors_by_status = sort_by_status()
+
+        if not self.params.fail_on_error:
+            self.job_logger.warning('`fail_on_error` is turned off !')
+
+        if self.params.is_insert:
+            log.debug('SKIP creation: %s documents already exist.',
+                        len(errors_by_status.pop(409, [])))
+
+        for status, errors in errors_by_status.items():
+            msg = '`%s` out of `%s` documents failed to index\n%.1024s' % (len(errors), data_size, errors)
+            if self.params.fail_on_error:
                 raise ValueError(msg)
             else:
                 self.job_logger.error(msg)
-
-        try:
-            if self.params.dry_run:
-                return
-
-            for chunk in chunks(self._buffer, self.params.write_buffer_size):
-                success, errors, retries = flush(chunk)
-
-                while(retries and nb_retries):
-                    log.debug('RETRY BULK FLUSH for %s docs', len(retries))
-                    success2, errors2, retries = flush(retries)
-                    success +=success2
-                    errors +=errors2
-                    nb_retries -=1
-
-                if errors:
-                    raise_or_log(len(chunk), errors)
-
-        finally:
-            self._buffer = []
 
     def build_pk(self, data):
         self.params.pk = self.params.get('pk') or self.params.op_params
@@ -244,17 +236,24 @@ class ESBackend(Base):
 
         action = slovar({
             '_index': self.klass.index,
-            '_type': self.params.doc_type,
             '_id': pk,
         })
+
+        if ES.version.major < 7:
+            action['_type'] = self.params.doc_type
 
         #pop previous action key fields if any
         data.pop_many(action.keys())
 
-        if self.params.op in ['create', 'index']:
-            # if its create it will fail if document exists. To use this it should be handled in flush.
-            # if its index it will either create or overwrite.
-            action['_op_type'] = 'index'
+        if self.params.op == 'create':
+            if self.params.is_insert:
+                # use create operation to insert new doc or fail if exists.
+                # failures are handled in flush method
+                action['_op_type'] = 'create'
+            else:
+                # otherwise using index to create or overwrite if exists.
+                action['_op_type'] = 'index'
+
             action['_source'] = data
 
         elif self.params.op in ['update', 'upsert']:
@@ -292,11 +291,11 @@ class ESBackend(Base):
             log.info('Index settings: %s' % index_settings)
             ES.api.indices.create(ds.index, body=index_settings or None)
 
-        exists = ES.api.indices.get_mapping(index=ds.index, doc_type=params.doc_type, ignore_unavailable=True)
-        if not exists:
-            ES.api.indices.put_mapping(**dict(index = ds.index,
-                                          doc_type = params.doc_type,
-                                          body = params.mapping_body))
+        meta = ES.get_meta(ds.index)
+        if not meta.get('mapping'):
+            ES.put_mapping(index = ds.index,
+                                  doc_type = params.doc_type,#obsolete in ver >= 7
+                                  body = params.mapping_body)
 
     @classmethod
     def update_settings(cls, index, body):

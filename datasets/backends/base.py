@@ -225,10 +225,6 @@ class Base(object):
             return self.create(data)
 
         elif _op == 'update':
-            #TODO not sure why we extract source data keys to do remove.
-            # if self.params.remove_fields:
-                # self.params.remove_fields = data.extract(self.params.remove_fields).keys()
-
             return self.update(data)
 
         elif _op == 'upsert':

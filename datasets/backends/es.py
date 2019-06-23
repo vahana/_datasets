@@ -73,6 +73,10 @@ class ESBackend(Base):
 
     def __init__(self, params, job_log=None):
         self.define_op(params, 'asstr', 'mapping', allow_missing=True)
+        self.define_op(params, 'asbool', 'mapping_update', default=False)
+
+        if params.mapping_update and not params.get('mapping'):
+            raise ValueError('mapping must be supplied with mapping_update flag')
 
         super(ESBackend, self).__init__(params, job_log)
 
@@ -99,10 +103,6 @@ class ESBackend(Base):
         return super().pre_save(data)
 
     def create(self, data):
-        data = self.pre_save(data)
-        self.add_to_buffer(data)
-
-    def update(self, data):
         pk = self.build_pk(data)
         data = self.pre_save(data)
 
@@ -111,8 +111,11 @@ class ESBackend(Base):
 
         self.add_to_buffer(data, pk=pk)
 
+    def update(self, data):
+        self.create(data)
+
     def upsert(self, data):
-        self.update(data)
+        self.create(data)
 
     def delete(self, data):
         self.add_to_buffer(data)
@@ -128,10 +131,12 @@ class ESBackend(Base):
             self.params.mapping_body = maybe_dotted(self.params.mapping)()
             _, _, self.params.doc_type = self.params.mapping.rpartition('.')
 
-        def use_or_create_mapping(index, mapping):
+        def use_or_create_mapping(index, mapping, force_update=False):
             doc_types = ES.get_doc_types(index)
-            if doc_types:
+
+            if doc_types and not force_update:
                 self.params.doc_type = doc_types[0]
+
             else:
                 if mapping:
                     set_mapping(mapping)
@@ -145,7 +150,8 @@ class ESBackend(Base):
             log.info(msg)
 
         ds = self.get_dataset(self.params)
-        use_or_create_mapping(ds.index, self.params.get('mapping'))
+        use_or_create_mapping(ds.index, self.params.get('mapping'),
+                                            self.params.mapping_update)
 
         #disable throttling for fast bulk indexing
         ES.api.cluster.put_settings(body={
@@ -182,7 +188,7 @@ class ESBackend(Base):
             errors_by_status = slovar()
             for each in errors:
                 try:
-                    errors_by_status.add_to_list(each['create']['status'], each)
+                    errors_by_status.add_to_list(each[self.params.op]['status'], each)
                 except KeyError:
                     errors_by_status.add_to_list('unknown', each)
 
@@ -194,8 +200,12 @@ class ESBackend(Base):
             self.job_logger.warning('`fail_on_error` is turned off !')
 
         if self.params.is_insert:
-            log.debug('SKIP creation: %s documents already exist.',
+            log.warning('SKIP creation: %s documents already exist.',
                         len(errors_by_status.pop(409, [])))
+
+        if self.params.op == 'delete':
+            log.warning('SKIP deletion: %s documents did not exist.',
+                        len(errors_by_status.pop(404, [])))
 
         for status, errors in errors_by_status.items():
             msg = '`%s` out of `%s` documents failed to index\n%.1024s' % (len(errors), data_size, errors)
@@ -212,7 +222,7 @@ class ESBackend(Base):
             return data['id']
 
         if not self.params.get('pk'):
-            if self.params.op in ['upsert', 'update', 'delete']:
+            if self.params.op_params:
                 self.params.pk = self.params.op_params
             else:
                 data['id'] = str(ObjectId())

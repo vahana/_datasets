@@ -86,6 +86,7 @@ class ESBackend(Base):
         if self.params.op in ['update', 'upsert', 'delete'] and not self.params.op_params:
             raise ValueError('op params must be supplied')
 
+
         self.process_mapping()
 
     def log_action(self, data, pk, action):
@@ -123,7 +124,7 @@ class ESBackend(Base):
     def process_mapping(self):
 
         def set_default_mapping():
-            self.job_logger.warning('Forgot to pass the mapping param ? `notanalyzed` default mapping will be used')
+            log.warning('Forgot to pass the mapping param ? `notanalyzed` default mapping will be used')
             self.params.doc_type = 'notanalyzed'
             self.params.mapping_body = NOT_ANALLYZED
 
@@ -197,7 +198,7 @@ class ESBackend(Base):
         errors_by_status = sort_by_status()
 
         if not self.params.fail_on_error:
-            self.job_logger.warning('`fail_on_error` is turned off !')
+            log.warning('`fail_on_error` is turned off !')
 
         if self.params.is_insert:
             log.warning('SKIP creation: %s documents already exist.',
@@ -212,7 +213,7 @@ class ESBackend(Base):
             if self.params.fail_on_error:
                 raise ValueError(msg)
             else:
-                self.job_logger.error(msg)
+                log.error(msg)
 
     def build_pk(self, data):
         self.params.pk = self.params.get('pk') or self.params.op_params
@@ -227,10 +228,6 @@ class ESBackend(Base):
             else:
                 data['id'] = str(ObjectId())
                 return data['id']
-
-        # if len(self.params.pk) == 1:
-        #     pk = self.params.pk[0]
-        #     return data.flat()[pk]
 
         pk_data = data.extract(self.params.pk).flat()
 
@@ -270,6 +267,7 @@ class ESBackend(Base):
             action['_op_type'] = 'update'
             action['_retry_on_conflict'] = 3
             action['doc'] = data
+
             if self.params.op == 'upsert':
                 action['doc_as_upsert'] = True
 
@@ -279,8 +277,10 @@ class ESBackend(Base):
         else:
             raise ValueError('Bad op %s' % self.params.op)
 
-        self._buffer.append(action)
-        self.log_action(data, pk, action['_op_type'])
+        with self._buffer_lock:
+            self._buffer.append(action)
+
+        self.log_action(data, pk, self.params.op)
 
         return data
 
@@ -323,4 +323,8 @@ class ESBackend(Base):
     def drop_index(cls, params):
         ds = cls.get_dataset(params)
         ES.api.indices.delete(index=ds.index, ignore=[400, 404])
+
+    @classmethod
+    def drop_namespace(cls, name):
+        ES.api.indices.delete(index='%s.*' % name, ignore=[400, 404])
 

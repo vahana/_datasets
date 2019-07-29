@@ -22,11 +22,10 @@ import datasets
 from datasets.backends.base import Base
 
 
-class MongoBackend(Base):
+class MONGOBackend(Base):
 
     @classmethod
     def get_dataset(cls, ds, define=False):
-
         ds = cls.process_ds(ds)
 
         if define:
@@ -53,7 +52,12 @@ class MongoBackend(Base):
         drop_db(ns)
 
     def log_action(self, data, query, action):
-        msg = '%s with query=%s\n%s' % (action.upper(), query, self.format4logging(data=data))
+        if action in ['create']:
+            with_arg = 'with pk=%s' % (data.extract(self.params.get('pk')))
+        else:
+            with_arg = 'with query=%s' % query
+
+        msg = '%s %s\n%s' % (action.upper(), with_arg, self.format4logging(data=data))
         if self.params.dry_run:
             log.warning('DRY RUN: %s' % msg)
         else:
@@ -65,7 +69,9 @@ class MongoBackend(Base):
         for name, val in list(data.items()):
             setattr(obj, name, val)
 
-        self._buffer.append(obj)
+        with self._buffer_lock:
+            self._buffer.append(obj)
+
         return obj
 
     def flush(self, objs):
@@ -111,37 +117,63 @@ class MongoBackend(Base):
                 obj.save_safe()
 
     def create(self, data):
-        # if 'skip_by' in self.params:
-        #     _params = self.build_query_params(data, self.params.skip_by)
-        #     _params['_count'] = 1
-        #     exists = self.klass.get_collection(**_params)
-        #     if exists:
-        #         log.debug('SKIP creation: %s objects exists with: %s', exists, _params)
-        #         return
-
-        data['original_id'] = data.pop('id', None) # pop the id so mongo creates a new document
         data = self.pre_save(data)
         self.add_to_buffer(data)
         self.log_action(data, None, 'create')
 
-    def update(self, data):
-        params, objects = self.get_objects(self.params.op_params, data)
+    def pre_save(self, data):
+        #this is here b/c for some reason mongoengine does not detect this and throws exception downstream.
+        from mongoengine.queryset.transform import MATCH_OPERATORS
+        for each in MATCH_OPERATORS:
+            bad_field = data.pop(each, None)
+            if bad_field:
+                log.warning('Field matched a reserved mongoengine operator `%s` with a value `%s`. Will be popped out.',
+                                each, bad_field)
 
-        if not objects:
-            self.log_action({}, params, 'update')
-            self.log_not_found(params, data)
+        return super().pre_save(data)
+
+    def update_objects(self, objects, data, qparams, upsert=False):
+
+        update_count = len(objects)
+        if update_count > 1:
+            msg = 'Multiple (%s) updates for\n%s' % (update_count,
+                                                     self.format4logging(query=params))
+            self.job_logger.warning(msg)
+
+            if not self.params.update_multi:
+                raise ValueError(msg)
+
+        data = self.pre_save(data)
+        data.pop('id', None);data.pop('_id', None)
+
+        if not data:
+            log.debug('NOTHING TO UPDATE')
             return
 
-        self.update_objects(params, objects, data)
+        update_dct = slovar()
+
+        for rf in self.params.remove_fields:
+            data.pop(rf, None) # make sure we dont `set__` this field along with `unset__`
+            update_dct['unset__%s' % rf] = 1
+
+        update_dct.update(to_dunders(data))
+
+        action = ('upsert' if upsert else 'update')
+
+        if not self.params.dry_run:
+            objects.update(upsert=upsert, **update_dct)
+            status = self.klass.get_last_status()
+            log.debug('%s status: %s', action, status)
+
+        self.log_action(update_dct, qparams, action)
+
+    def update(self, data):
+        qparams, objects = self.get_objects(self.params.op_params, data)
+        self.update_objects(objects, data, qparams)
 
     def upsert(self, data):
-        params, objects = self.get_objects(self.params.op_params, data)
-
-        if objects:
-            self.update_objects(params, objects, data)
-        else:
-            self.create(data)
-            self.log_action(data, None, 'create')
+        qparams, objects = self.get_objects(self.params.op_params, data)
+        self.update_objects(objects, data, qparams, upsert=True)
 
     def delete(self, data):
         params, objects = self.get_objects(self.params.op_params, data)
@@ -183,49 +215,6 @@ class MongoBackend(Base):
             _params = _params.update_with(typecast(self.params.query))
 
         return _params, self.klass.get_collection(**_params.flat())
-
-    def update_objects(self, params, objects, data):
-
-        update_count = len(objects)
-
-        def do_update(obj, data):
-            data = self.pre_save(data)
-            data.pop('id', None);data.pop('_id', None)
-
-            #udpate_fields allows to update only partially if data exists in cases of upsert
-            if self.params.update_fields:
-                data = data.extract(self.params.update_fields).flat()
-
-            if not data:
-                log.debug('NOTHING TO UPDATE')
-                return
-
-            update = slovar()
-
-            for rf in self.params.remove_fields:
-                data.pop(rf, None) # make sure we dont `set__` this field
-                update['unset__%s' % rf] = 1
-
-            update.update(to_dunders(data))
-
-            if not self.params.dry_run:
-                updated = obj.update(**update)
-
-            self.log_action(update, params, 'update')
-
-        if update_count > 1:
-            msg = 'Multiple (%s) updates for\n%s' % (update_count,
-                                                     self.format4logging(query=params))
-            self.job_logger.warning(msg)
-
-        actions = self.params.extract(
-                    ['overwrite', 'append_to', 'append_to_set', 'merge_to', 'flatten'])
-
-        if actions:
-            for each in objects:
-                do_update(each, slovar.to(each.to_dict()).update_with(data, **actions))
-        else:
-            do_update(objects, data)
 
 
 def includeme(config):

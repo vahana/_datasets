@@ -38,7 +38,7 @@ class Results(list):
 class CSV(object):
 
     def __init__(self, ds_name):
-        file_name = ds_name + '.csv'
+        file_name = ds_name
         if not os.path.isfile(file_name):
             log.error('File does not exist %s' % file_name)
         self.file_name = file_name
@@ -148,7 +148,7 @@ class CSVBackend(object):
     def ls_ns(cls, ns):
         path = os.path.join(datasets.Settings.get('csv.root'), ns)
         if os.path.isdir(path):
-            return [it[:-4] for it in fnmatch.filter(os.listdir(os.path.join(datasets.Settings.get('csv.root'), ns)),
+            return [it for it in fnmatch.filter(os.listdir(os.path.join(datasets.Settings.get('csv.root'), ns)),
                                     FNMATCH_PATTERN)]
 
         raise prf.exc.HTTPBadRequest('%s is not a dir' % ns)
@@ -193,7 +193,7 @@ class CSVBackend(object):
         dir_path = os.path.join(self.params.csv_root, self.params.ns)
         ds_name = os.path.join(self.params.csv_root, self.params.ns, self.params.name)
 
-        file_name = ds_name + '.csv'
+        file_name = ds_name
 
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)

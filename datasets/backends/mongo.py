@@ -53,7 +53,7 @@ class MONGOBackend(Base):
 
     def log_action(self, data, query, action):
         if action in ['create']:
-            with_arg = 'with pk=%s' % (data.extract(self.params.get('pk')))
+            with_arg = 'with pk=%s' % (data.extract(self.params.pk) if self.params.get('pk') else None)
         else:
             with_arg = 'with query=%s' % query
 
@@ -103,7 +103,7 @@ class MONGOBackend(Base):
                         len(errors_by_status.pop(11000, [])))
 
         for status, errors in errors_by_status.items():
-            msg = '`%s` out of `%s` documents failed to index\n%.1024s' % (len(errors), data_size, errors)
+            msg = '`%s` out of `%s` documents failed to index\n%.8096s' % (len(errors), data_size, errors)
             if self.params.fail_on_error:
                 raise ValueError(msg)
             else:
@@ -203,8 +203,7 @@ class MONGOBackend(Base):
                 raise ValueError('empty op params')
 
             raise ValueError('update query is empty for:\n%s' %
-                             self.format4logging(
-                                query=_keys, data=data))
+                                 self.format4logging(query=_keys, data=data))
 
         query['_limit'] = -1
         return query

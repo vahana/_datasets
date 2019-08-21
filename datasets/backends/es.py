@@ -108,7 +108,7 @@ class ESBackend(Base):
         data = self.pre_save(data)
 
         if self.params.remove_fields:
-            data = data.extract(['-%s'%it for it in self.params.remove_fields])
+            data = data.remove(self.params.remove_fields, flat=True)
 
         self.add_to_buffer(data, pk=pk)
 

@@ -20,15 +20,7 @@ class Base(object):
 
     @classmethod
     def process_ds(cls, ds):
-        if isinstance(ds, str):
-            backend, _, name = ds.rpartition('://')
-            ns, _, name = ds.partition('.')
-            ds = slovar(name=name, backend=backend, ns=ns)
-        elif isinstance(ds, dict):
-            ds = slovar.to(ds)
-        else:
-            raise ValueError('ds should be either string or dict. got %s' % ds)
-
+        ds = slovar.to(ds)
         ds.has('name')
         ds.has('backend', forbidden_values=['', None])
         ds.has('ns')
@@ -201,11 +193,11 @@ class Base(object):
         default_f = self.params.default.flat()
 
         for k in default_f:
-            if default_f[k] == '__oid__':
+            if default_f[k] == '__OID__':
                 default_f[k] = str(ObjectId())
-            elif default_f[k] == '__today__':
+            elif default_f[k] == '__TODAY__':
                 default_f[k] = datetime.today()
-            elif default_f[k] == '__now__':
+            elif default_f[k] == '__NOW__':
                 default_f[k] = datetime.now()
 
         default_f = typecast(default_f)

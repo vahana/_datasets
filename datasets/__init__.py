@@ -10,40 +10,15 @@ log = logging.getLogger(__name__)
 Settings = slovar()
 
 def parse_ds(name):
-    if not name:
-        return {}
+    if isinstance(name, dict):
+        return name
 
-    if '%TODAY%' in name:
-        name = name.replace('%TODAY%', TODAY())
-
-    if not name:
-        return slovar()
-
-    params = slovar()
-    parts = name.split('.')
-
-    if parts[0] in ['mongo', 'es']:
-        params.backend = parts.pop(0)
-    else:
-        params.backend = 'mongo'
-
-    if parts:
-        params.ns = parts.pop(0)
-        if parts:
-            params.name = parts[0]
-        elif params.backend == 'es':
-            params.name = params.ns
-            params.ns = ''
-
-    if params.backend == 'es':
-        params.name = params.name.lower()
-
-    elif params.backend == 'mongo':
-        if not params.ns:
-            raise ValueError('missing mongo collection name')
-
-    return params
-
+    parts = (name+'...').split('.')
+    return slovar(
+        backend = parts[0],
+        ns = parts[1],
+        name = parts[2],
+    )
 
 def get_ds(name):
     return get_dataset(parse_ds(name))

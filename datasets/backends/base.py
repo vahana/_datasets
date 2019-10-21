@@ -56,7 +56,6 @@ class Base(object):
         self.define_op(params, 'aslist', 'fields', allow_missing=True)
         self.define_op(params, 'aslist', 'remove_fields', default=[])
         self.define_op(params, 'aslist', 'update_fields', default=[])
-        self.define_op(params, 'asbool', 'keep_source_logs', default=False)
         self.define_op(params, 'asbool', 'dry_run', default=False)
         self.define_op(params, 'asint',  'log_size', default=1000)
         self.define_op(params, 'aslist', 'log_fields', default=[])
@@ -66,14 +65,16 @@ class Base(object):
         self.define_op(params, 'aslist', 'skip_by', allow_missing=True)
         self.define_op(params, 'asstr',  'backend', allow_missing=True)
         self.define_op(params, 'asstr',  'ns', raise_on_values=[None])
+
         self.define_op(params, 'aslist', 'pk', allow_missing=True)
         self.define_op(params, 'asbool', 'skip_timestamp', default=False)
         self.define_op(params, 'asbool', 'verbose_logging', default=False)
         self.define_op(params, 'asbool', 'update_multi', default=False)
 
         self.define_op(params, 'asint', 'write_buffer_size', default=1000)
-        self.define_op(params, 'asint', 'flush_retries', default=1)
+        self.define_op(params, 'asint', 'flush_retries', default=2)
 
+        self.define_op(params, 'asstr',  'log_ds', allow_missing=True)
 
         self._operations['query'] = dict
         self._operations['default'] = dict
@@ -82,15 +83,19 @@ class Base(object):
         self.validate_ops(params)
 
         params.op, _, params.op_params = params.op.partition(':')
+        params.pk = params.get('pk') or params.op_params or 'id'
+
         params.aslist('op_params', default=[])
         params.is_insert = params.op == 'create' and params.get('skip_by')
         self.params = params
 
         self.klass = datasets.get_dataset(self.params, define=True)
+
         self.job_log = job_log or slovar()
 
         self._buffer_lock = Lock()
         self._buffer = []
+        self._log_buffer = []
 
     def process_many(self, dataset):
         for data in dataset:
@@ -103,7 +108,9 @@ class Base(object):
 
         with self._buffer_lock:
             flush_buffer = self._buffer
+            flush_log_buffer = self._log_buffer
             self._buffer = []
+            self._log_buffer = []
 
         for chunk in chunks(flush_buffer, self.params.write_buffer_size):
             success, errors, retries = self.flush(chunk)
@@ -118,20 +125,17 @@ class Base(object):
             if errors:
                 self.raise_or_log(len(chunk), errors)
 
+        for chunk in chunks(flush_log_buffer, self.params.write_buffer_size):
+            success, errors, retries = ES.flush(chunk)
+            if errors:
+                self.raise_or_log(len(chunk), errors)
+
     def raise_or_log(self, data_size, errors):
         msg = '`%s` out of `%s` documents failed to index\n%.1024s' % (len(errors), data_size, errors)
         if self.params.fail_on_error:
             raise ValueError(msg)
         else:
             log.error(msg)
-
-    def extract_log(self, data):
-        return slovar.to(data.pop('log', {})).update_with(self.job_log)
-
-    def extract_meta(self, data):
-        log = self.extract_log(data)
-        source = data.get('source', {})
-        return dict(log=log, source=source)
 
     def process(self, data):
         data = self.add_defaults(data)
@@ -209,7 +213,6 @@ class Base(object):
 
         return data_f.update_with(default_f, overwrite=0).unflat()
 
-
     def log_not_found(self, params, data, tags=[], msg=''):
         msg = msg or 'NOT FOUND in <%s> with:\n%s' % (self.klass,
                                         self.format4logging(
@@ -217,32 +220,6 @@ class Base(object):
 
         if msg:
             log.warning(msg)
-
-    def new_logs(self, data, meta):
-        logs = data.pop('logs', [])
-        if not isinstance(logs, list):
-            raise ValueError(
-                '`logs` field suppose to be a `list` type, got %s instead.\nlogs=%s' % (type(logs), logs))
-
-        logs.insert(0, meta.get('log'))
-
-        #TODO: remove this at some point when all logs are converted to dict
-        #check the very first log item
-        if isinstance(logs[-1]['source'], dict):
-            #all logs are converted. nothing to do.
-            return logs
-
-        new_logs = []
-
-        for each in logs:
-            #old format `source` was just a string
-            if isinstance(each.source, str):
-                each.update(slovar.to(each).extract(
-                    'source__as__source.name,target__as__target.name,merger__as__merger.name'))
-
-            new_logs.append(each)
-
-        return new_logs
 
     def process_empty(self, data):
         if self.params.pop_empty:
@@ -254,26 +231,64 @@ class Base(object):
                         data.pop(ekey)
         return data
 
+    def build_pk(self, data):
+        if 'id' == self.params.pk:
+            if self.params.pk not in data:
+                data[self.params.pk] = str(ObjectId())
+                return self.params.pk, data[self.params.pk]
+
+        pk_data = data.extract(self.params.pk).flat()
+
+        if not pk_data:
+            raise KeyError('missing data for pk `%s`' % (self.params.pk))
+
+        return pk_data.concat_values(sep=':')
+
+    def save_log(self, data):
+        if not self.params.get('log_ds'):
+            return
+
+        def build_log(data):
+            pk, pkv = self.build_pk(data)
+            log = slovar({
+                'id': str(ObjectId()),
+                pk: pkv,
+                'target_pk_field': pk,
+            })
+            return self.job_log.update_with(log)
+
+        log = build_log(data)
+
+        action = slovar({
+            '_index': self.params.log_ds,
+            '_op_type': 'create',
+            '_source': log.unflat()
+        })
+
+        if ES.version.major < 7:
+            action['_type'] = 'notanalyzed'
+
+        self._log_buffer.append(action)
+
     def pre_save(self, data):
         is_new = self.params.op == 'create'
-        meta = self.extract_meta(data)
 
-        logs = self.new_logs(data, meta)
+        self.save_log(data)
+
         data = self.process_empty(data)
-
-        if not data:
-            return data
 
         if 'fields' in self.params:
             data = typecast(data.extract(self.params.fields))
 
-        data['logs'] = logs
+        if not data:
+            return data
 
         if not self.params.skip_timestamp:
+            _now = datetime.utcnow()
             if is_new:
-                data['created_at'] = logs[0].created_at
+                data['created_at'] = _now
 
-            data['updated_at'] = logs[0].created_at
+            data['updated_at'] = _now
 
         return data
 

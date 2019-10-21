@@ -1,5 +1,5 @@
 import logging
-from elasticsearch import helpers
+from elasticsearch import TransportError
 from bson import ObjectId
 from pprint import pformat
 
@@ -104,13 +104,13 @@ class ESBackend(Base):
         return super().pre_save(data)
 
     def create(self, data):
-        pk = self.build_pk(data)
+        pk, pk_val = self.build_pk(data)
         data = self.pre_save(data)
 
         if self.params.remove_fields:
             data = data.remove(self.params.remove_fields, flat=True)
 
-        self.add_to_buffer(data, pk=pk)
+        self.add_to_buffer(data, pk_val=pk_val)
 
     def update(self, data):
         self.create(data)
@@ -159,29 +159,7 @@ class ESBackend(Base):
             'transient':{'indices.store.throttle.type' : 'none'}})
 
     def flush(self, data):
-        success, all_errors = helpers.bulk(ES.api, data, raise_on_error=False,
-                                                raise_on_exception=False, refresh=True)
-        errors = []
-        retries = []
-        retry_data = []
-
-        if all_errors:
-            #separate retriable errors
-            for err in all_errors:
-                err = slovar(err)
-                if err.fget('index.status') == 429: #too many requests
-                    retries.append(err['index']['_id'])
-                else:
-                    errors.append(err)
-
-                if retries:
-                    for each in data:
-                        if each['_id'] in retries:
-                            retry_data.append(each)
-
-        log.debug('BULK FLUSH: total=%s, success=%s, errors=%s, retries=%s',
-                                len(data), success, len(errors), len(retry_data))
-        return success, errors, retry_data
+        return ES.flush(data)
 
     def raise_or_log(self, data_size, errors):
 
@@ -215,35 +193,14 @@ class ESBackend(Base):
             else:
                 log.error(msg)
 
-    def build_pk(self, data):
-        self.params.pk = self.params.get('pk') or self.params.op_params
+    def add_to_buffer(self, data, pk_val=None):
 
-        if not self.params.pk:
-            data['id'] = str(ObjectId())
-            return data['id']
-
-        if not self.params.get('pk'):
-            if self.params.op_params:
-                self.params.pk = self.params.op_params
-            else:
-                data['id'] = str(ObjectId())
-                return data['id']
-
-        pk_data = data.extract(self.params.pk).flat()
-
-        if not pk_data:
-            raise KeyError('missing data for pk `%s`' % (self.params.pk))
-
-        return pk_data.concat_values(sep=':')
-
-    def add_to_buffer(self, data, pk=None):
-
-        if not pk:
-            pk = self.build_pk(data)
+        if not pk_val:
+            pk, pk_val = self.build_pk(data)
 
         action = slovar({
             '_index': self.klass.index,
-            '_id': pk,
+            '_id': pk_val,
         })
 
         if ES.version.major < 7:
@@ -280,7 +237,7 @@ class ESBackend(Base):
         with self._buffer_lock:
             self._buffer.append(action)
 
-        self.log_action(data, pk, self.params.op)
+        self.log_action(data, pk_val, self.params.op)
 
         return data
 
@@ -299,7 +256,11 @@ class ESBackend(Base):
                 index_settings.update(params.settings.extract('es.*'))
 
             log.info('Index settings: %s' % index_settings)
-            ES.api.indices.create(ds.index, body=index_settings or None)
+            try:
+                ES.api.indices.create(ds.index, body=index_settings or None)
+            except TransportError as e:
+                if 'index_already_exists_exception' not in e.error:
+                    raise e
 
         meta = ES.get_meta(ds.index)
         if not meta.get('mapping'):

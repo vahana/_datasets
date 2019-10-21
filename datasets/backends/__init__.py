@@ -4,12 +4,14 @@ from datasets.backends.csv import CSVBackend
 from datasets.backends.mongo import MONGOBackend
 from datasets.backends.es import ESBackend
 from datasets.backends.s3 import S3Backend
+from datasets.backends.http import HTTPBackend
 
 BACKENDS = slovar(
     ES_BE_NAME = 'es',
     MONGO_BE_NAME = 'mongo',
     CSV_BE_NAME = 'csv',
     S3_BE_NAME = 's3',
+    HTTP_BE_NAME = 'http',
 )
 
 class Backend(object):

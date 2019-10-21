@@ -2,8 +2,8 @@ import logging
 from pyramid.config import Configurator
 
 from slovar import slovar
-from prf.utils import maybe_dotted
-from prf.utils import TODAY
+from slovar.strings import split_strip
+from prf.utils import maybe_dotted, TODAY
 
 
 log = logging.getLogger(__name__)
@@ -39,17 +39,18 @@ def drop_namespace(ds):
     return name2be(ds.backend).drop_namespace(ds.ns)
 
 def get_transformers(params, logger=None, **tr_args):
-    transformers = []
+    transformers = {}
 
-    for tr in params.aslist('transformer', default=[]):
-        trans, _, trans_as = tr.partition('__as__')
+    for call, trs in params.get('transformer', {}).items():
+        transformers[call] = []
+        for tr in split_strip(trs):
+            trans, _, trans_as = tr.partition('__as__')
 
-        if trans_as:
-            tr_args['trans_as'] = trans_as
+            if trans_as:
+                tr_args['trans_as'] = trans_as
 
-        tr_args.update(params.get('transformer_args', {}))
-
-        transformers.append(maybe_dotted(trans)(logger=logger, **tr_args))
+            tr_args.update(params.get('transformer_args', {}))
+            transformers[call].append(maybe_dotted(trans)(logger=logger, **tr_args))
 
     return transformers
 

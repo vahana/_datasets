@@ -5,9 +5,13 @@ import urllib3
 from slovar import slovar
 
 import prf
-from prf.request import PRFRequest
+from prf.request import PRFRequest, Request
+import prf.exc as prf_exc
+from prf.utils import rextract
 
 import datasets
+
+log = logging.getLogger(__name__)
 
 def auth_url(params):
     auth = slovar()
@@ -33,7 +37,7 @@ def auth_url(params):
 
 
 class prf_api(object):
-    def __init__(self, params):
+    def __init__(self, ds):
         self.api = PRFRequest(params.name, auth=auth_url(params), _raise=True)
 
     def get_collection(self, **params):
@@ -45,24 +49,53 @@ class prf_api(object):
             yield self.api.get_data(resp)
 
 
-class HTTPBackend(object):
-    def __init__(self, params):
-        self.params = params
-        self.api = PRFRequest(params.name, auth=auth_url(params), _raise=True)
+class request_api(object):
 
-    def process_many(self, dataset):
-        payload_wrapper = self.params.get('payload_wrapper')
-        if payload_wrapper:
-            dataset = slovar({payload_wrapper: dataset}).unflat()
-
-        if isinstance(dataset, dict):
-            self.process(dataset)
+    def __init__(self, ds):
+        if ds.ns != 'NA':
+            self.ns = ds.ns
         else:
-            for data in dataset:
-                self.process(data)
+            self.ns = None
 
-    def process(self, data):
-        if self.params.op == 'create':
-            self.api.post(data=data)
-        elif self.params.op == 'upsert':
-            self.api.put(data=data)
+        self.api = Request(_raise=True)
+
+    def get_data(self, resp):
+        dataset = resp.json()
+
+        if self.ns:
+            dataset = dataset[self.ns]
+
+        if not isinstance(dataset, list):
+            dataset = [dataset]
+
+        return [slovar(it) for it in dataset]
+
+    def validate_url(self, params):
+        url = params.get('_url')
+
+        if not url:
+            raise prf_exc.HTTPBadRequest('`_url` params is missing')
+
+        return url
+
+    def get_collection(self, **params):
+        _count = params.pop('_count', None)
+
+        resp = self.api.get(self.validate_url(params),
+                            params=params)
+        data = self.get_data(resp)
+
+        if _count:
+            return len(data)
+
+        return data
+
+    def get_collection_paged(self, page_size, **params):
+        yield self.get_collection(**params)
+
+
+class HTTPBackend(object):
+    @classmethod
+    def get_dataset(cls, ds):
+        return request_api(ds)
+

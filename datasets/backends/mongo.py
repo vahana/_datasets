@@ -24,6 +24,9 @@ from datasets.backends.base import Base
 
 class MONGOBackend(Base):
 
+    def __init__(self, params, job_log=None):
+        super().__init__(params, job_log)
+
     @classmethod
     def get_dataset(cls, ds, define=False):
         ds = cls.process_ds(ds)
@@ -103,7 +106,7 @@ class MONGOBackend(Base):
                         len(errors_by_status.pop(11000, [])))
 
         for status, errors in errors_by_status.items():
-            msg = '`%s` out of `%s` documents failed to index\n%.8096s' % (len(errors), data_size, errors)
+            msg = '`%s` out of `%s` documents failed to %s\n%.8096s' % (len(errors), data_size, self.params.op, errors)
             if self.params.fail_on_error:
                 raise ValueError(msg)
             else:
@@ -137,8 +140,8 @@ class MONGOBackend(Base):
         update_count = len(objects)
         if update_count > 1:
             msg = 'Multiple (%s) updates for\n%s' % (update_count,
-                                                     self.format4logging(query=params))
-            self.job_logger.warning(msg)
+                                                     self.format4logging(query=qparams))
+            log.warning(msg)
 
             if not self.params.update_multi:
                 raise ValueError(msg)

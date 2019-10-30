@@ -86,31 +86,26 @@ class ESBackend(Base):
         if self.params.op in ['update', 'upsert', 'delete'] and not self.params.op_params:
             raise ValueError('op params must be supplied')
 
-
         self.process_mapping()
 
-    def log_action(self, data, pk, action):
-        msg = '%s with pk=%s\n%s' % (action.upper(), pk, self.format4logging(data=data))
+    def log_action(self, data, index, pk, action):
+        msg = '%s with %s(pk=%s)\n%s' % (action.upper(), index, pk, self.format4logging(data=data))
         if self.params.dry_run:
             log.warning('DRY RUN: %s' % msg)
         else:
             log.debug(msg)
 
-    def pre_save(self, data):
-        #clean ES metadata fields
-        data.pop('_id', None)
-        data.pop('_index', None)
-        data.pop('_type', None)
-        return super().pre_save(data)
-
     def create(self, data):
         pk, pk_val = self.build_pk(data)
+
+        index = self.process_index(data)
+
         data = self.pre_save(data)
 
         if self.params.remove_fields:
             data = data.remove(self.params.remove_fields, flat=True)
 
-        self.add_to_buffer(data, pk_val=pk_val)
+        self.add_to_buffer(index, data, pk_val=pk_val)
 
     def update(self, data):
         self.create(data)
@@ -119,7 +114,8 @@ class ESBackend(Base):
         self.create(data)
 
     def delete(self, data):
-        self.add_to_buffer(data)
+        index = self.process_index(data)
+        self.add_to_buffer(index, data)
 
     def process_mapping(self):
 
@@ -193,13 +189,38 @@ class ESBackend(Base):
             else:
                 log.error(msg)
 
-    def add_to_buffer(self, data, pk_val=None):
+    def process_index(self, data):
+        '''
+            Choose the target index.
+            Rules:
+                if the index is an alias
+                    if data._index is part of that alias: use it
+                    else raise error, since the actual target index is ambiguous
+                if target index is actually an index, use it.
+        '''
 
+        #pop incoming meta from data first. not the best place, but we need the `_index`.
+        data.pop('_id', None)
+        data.pop('_type', None)
+        data_index = data.pop('_index', None)
+        index = self.klass.index
+
+        #target is an alias ?
+        if index in self.klass.alias_map:
+            if data_index and data_index in self.klass.index_map:
+                index = data_index
+            else:
+                raise ValueError('Target is an alias that does not contain the incoming data index.'
+                                 '\nTarget index: `%s`\nData index: `%s`' % (self.klass.alias_map, data_index))
+
+        return index
+
+    def add_to_buffer(self, index, data, pk_val=None):
         if not pk_val:
             pk, pk_val = self.build_pk(data)
 
         action = slovar({
-            '_index': self.klass.index,
+            '_index': index,
             '_id': pk_val,
         })
 
@@ -237,7 +258,7 @@ class ESBackend(Base):
         with self._buffer_lock:
             self._buffer.append(action)
 
-        self.log_action(data, pk_val, self.params.op)
+        self.log_action(data, index, pk_val, self.params.op)
 
         return data
 

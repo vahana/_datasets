@@ -20,7 +20,7 @@ NA_LIST = ['', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan',
             # 'NA', #removed this b/c we are using it in `parent` fields as a legit value not None.
             'NULL', 'NaN', 'n/a', 'nan', 'null']
 
-FNMATCH_PATTERN = '[!.]*.csv'
+FNMATCH_PATTERN = '*'
 
 class field_processor:
     def __init__(self, fields):
@@ -37,10 +37,27 @@ class Results(list):
 
 class CSV(object):
 
-    def __init__(self, ds_name):
-        file_name = ds_name
+    def create_if(self, path):
+        if os.path.isdir(path):
+            return
+
+        basedir = os.path.dirname(path)
+        if not os.path.exists(basedir):
+            os.makedirs(basedir)
+
+        open(path, 'a').close()
+
+    def __init__(self, ds, create=False):
+        if ds.name.startswith('/'):
+            file_name = ds.name
+        else:
+            file_name = os.path.join(datasets.Settings.get('csv.root'), ds.ns, ds.name)
+
         if not os.path.isfile(file_name):
-            log.error('File does not exist %s' % file_name)
+            if create:
+                self.create_if(file_name)
+            else:
+                log.error('File does not exist %s' % file_name)
         self.file_name = file_name
 
     def sniff(self, file_name):
@@ -145,22 +162,34 @@ class CSVBackend(object):
         return os.listdir(datasets.Settings.get('csv.root'))
 
     @classmethod
-    def ls_ns(cls, ns):
-        path = os.path.join(datasets.Settings.get('csv.root'), ns)
-        if os.path.isdir(path):
-            return [it for it in fnmatch.filter(os.listdir(os.path.join(datasets.Settings.get('csv.root'), ns)),
-                                    FNMATCH_PATTERN)]
+    def is_ns(cls, path):
+        _path = os.path.join(datasets.Settings.get('csv.root'), path)
+        return os.path.isdir(_path)
+
+    @classmethod
+    def ls_ns(cls, ns, flat=False):
+        base_path = os.path.join(datasets.Settings.get('csv.root'), ns)
+        folders = []
+        files = [] # only by extension
+
+        if os.path.isdir(base_path):
+            for root, subdirs, _files in os.walk(base_path):
+                if not flat:
+                    folders += subdirs
+                    files += _files
+                    break
+                else:
+                    for fl in _files:
+                        path = root.split(base_path)[-1].strip('/')
+                        files.append(os.path.join(path, fl))
+
+            return sorted(folders) + sorted(files)
 
         raise prf.exc.HTTPBadRequest('%s is not a dir' % ns)
 
     @classmethod
-    def get_dataset(cls, ds):
-        ds = Base.process_ds(ds)
-        if ds.name.startswith('/'):
-            file_name = ds.name
-        else:
-            file_name = os.path.join(datasets.Settings.get('csv.root'), ds.ns, ds.name)
-        return CSV(file_name)
+    def get_dataset(cls, ds, define=False):
+        return CSV(Base.process_ds(ds), create=define)
 
     def __init__(self, params, job_log):
         params.asstr('csv_root', default=datasets.Settings.get('csv.root'))

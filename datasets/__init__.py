@@ -27,7 +27,7 @@ def name2be(name):
     return maybe_dotted('datasets.backends.%s.%sBackend' % (name, name.upper()))
 
 def get_dataset(ds, define=False):
-    return name2be(ds.backend).get_dataset(ds)
+    return name2be(ds.backend).get_dataset(ds, define=define)
 
 def get_dataset_meta(ds):
     return name2be(ds.backend).get_meta(ds.ns, ds.name)

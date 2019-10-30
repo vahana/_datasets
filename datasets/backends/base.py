@@ -270,6 +270,12 @@ class Base(object):
 
         self._log_buffer.append(action)
 
+        data.add_to_list(
+            'logs', log.extract('job.contid,job.uid'))
+
+    def process_fields(self, data):
+        return typecast(data.extract(self.params.fields))
+
     def pre_save(self, data):
         is_new = self.params.op == 'create'
 
@@ -278,7 +284,7 @@ class Base(object):
         data = self.process_empty(data)
 
         if 'fields' in self.params:
-            data = typecast(data.extract(self.params.fields))
+            data = self.process_fields(data)
 
         if not data:
             return data

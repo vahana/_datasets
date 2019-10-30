@@ -79,13 +79,11 @@ class request_api(object):
         return url
 
     def get_collection(self, **params):
-        _count = params.pop('_count', None)
-
-        resp = self.api.get(self.validate_url(params),
-                            params=params)
+        params = slovar.to(params).unflat()
+        resp = self.api.get(self.validate_url(params), params=params.extract('url.*'))
         data = self.get_data(resp)
 
-        if _count:
+        if params.get('_count'):
             return len(data)
 
         return data

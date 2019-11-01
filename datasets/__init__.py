@@ -9,16 +9,28 @@ from prf.utils import maybe_dotted, TODAY
 log = logging.getLogger(__name__)
 Settings = slovar()
 
-def parse_ds(name):
-    if isinstance(name, dict):
+def parse_ds(name, **overwrites):
+    if not name or isinstance(name, dict):
         return name
 
-    parts = (name+'...').split('.')
-    return slovar(
-        backend = parts[0],
-        ns = parts[1],
-        name = parts[2],
-    )
+    if '%TODAY%' in name:
+        name = name.replace('%TODAY%', TODAY())
+
+    params = slovar()
+
+    if '/' in name:
+        sep = '/'
+        name_parts = name.split('/')
+    else:
+        sep = '.'
+        name_parts = name.split('.')
+
+    params.backend = name_parts[0]
+    params.ns = sep.join(name_parts[1:-1])
+    params.name = name_parts[-1]
+
+    params.update(overwrites)
+    return params
 
 def get_ds(name):
     return get_dataset(parse_ds(name))

@@ -57,7 +57,7 @@ class request_api(object):
         else:
             self.ns = None
 
-        self.api = Request(_raise=True)
+        self.api = Request(_raise=False)
 
     def get_data(self, resp):
         dataset = resp.json()
@@ -80,8 +80,16 @@ class request_api(object):
 
     def get_collection(self, **params):
         params = slovar.to(params).unflat()
+        params.aslist('_ignore_codes', default=[], itype=int)
+
         resp = self.api.get(self.validate_url(params), params=params.extract('url.*'))
-        data = self.get_data(resp)
+        data = []
+
+        if resp.ok:
+            data = self.get_data(resp)
+        else:
+            self.api.raise_or_log(resp,
+                _raise=resp.status_code not in params._ignore_codes)
 
         if params.get('_count'):
             return len(data)
@@ -94,6 +102,6 @@ class request_api(object):
 
 class HTTPBackend(object):
     @classmethod
-    def get_dataset(cls, ds):
+    def get_dataset(cls, ds, define=None):
         return request_api(ds)
 

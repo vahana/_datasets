@@ -74,7 +74,7 @@ class Base(object):
         self.define_op(params, 'asint', 'write_buffer_size', default=1000)
         self.define_op(params, 'asint', 'flush_retries', default=2)
 
-        self.define_op(params, 'asstr',  'log_ds', allow_missing=True)
+        self.define_op(params, 'asstr',  'log_ds', default='', mod=str.lower)
 
         self._operations['query'] = dict
         self._operations['default'] = dict

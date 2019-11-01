@@ -99,7 +99,7 @@ class MONGOBackend(Base):
         errors_by_status = sort_by_status()
 
         if not self.params.fail_on_error:
-            self.job_logger.warning('`fail_on_error` is turned off !')
+            log.warning('`fail_on_error` is turned off !')
 
         if self.params.is_insert:
             log.debug('SKIP creation: %s documents already exist.',
@@ -110,7 +110,7 @@ class MONGOBackend(Base):
             if self.params.fail_on_error:
                 raise ValueError(msg)
             else:
-                self.job_logger.error(msg)
+                log.error(msg)
 
     def do_save(self, obj):
         if not self.params.dry_run:

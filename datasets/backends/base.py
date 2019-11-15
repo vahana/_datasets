@@ -20,7 +20,7 @@ class Base(object):
 
     @classmethod
     def process_ds(cls, ds):
-        ds = slovar.to(ds)
+        ds = slovar.copy(ds)
         ds.has('name')
         ds.has('backend', forbidden_values=['', None])
         ds.has('ns')
@@ -46,7 +46,7 @@ class Base(object):
             raise KeyError('Invalid operations %s' % list(invalid_ops))
 
     def __init__(self, params, job_log=None):
-        params = slovar.to(params)
+        params = slovar.copy(params)
 
         self.define_op(params, 'asstr',  'name', raise_on_values=['', None])
 
@@ -99,7 +99,7 @@ class Base(object):
 
     def process_many(self, dataset):
         for data in dataset:
-            self.process(slovar.to(data))
+            self.process(data)
 
         nb_retries = self.params.flush_retries
 
@@ -178,7 +178,7 @@ class Base(object):
         if query:
             msg.append('QUERY: `%s`' % query)
         if data:
-            _data = slovar.to(data).extract(self.params.log_fields)
+            _data = data.extract(self.params.log_fields)
             _fields = list(data.keys())
             if self.params.log_pretty:
                 _data = pformat(_data)
@@ -205,7 +205,7 @@ class Base(object):
                 default_f[k] = datetime.now()
 
         default_f = typecast(default_f)
-        data_f = slovar.to(data).flat()
+        data_f = data.flat()
 
         dkeys = default_f.key_diff(data_f.keys())
         if dkeys:

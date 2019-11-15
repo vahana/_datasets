@@ -79,7 +79,7 @@ class request_api(object):
         return url
 
     def get_collection(self, **params):
-        params = slovar.to(params).unflat()
+        params = slovar(params).unflat()
         params.aslist('_ignore_codes', default=[], itype=int)
 
         resp = self.api.get(self.validate_url(params), params=params.extract('url.*'))

@@ -82,7 +82,13 @@ class request_api(object):
         params = slovar(params).unflat()
         params.aslist('_ignore_codes', default=[], itype=int)
 
-        resp = self.api.get(self.validate_url(params), params=params.extract('url.*'))
+        headers = params.extract('h.*')
+        qparams = params.extract('url.*')
+
+        if headers:
+            self.api.session.headers.update(headers)
+
+        resp = self.api.get(self.validate_url(params), params=qparams)
         data = []
 
         if resp.ok:

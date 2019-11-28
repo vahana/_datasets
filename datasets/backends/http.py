@@ -83,7 +83,7 @@ class request_api(object):
         params.aslist('_ignore_codes', default=[], itype=int)
 
         headers = params.extract('h.*')
-        qparams = params.extract('url.*')
+        qparams = params.extract('qs.*')
 
         if headers:
             self.api.session.headers.update(headers)

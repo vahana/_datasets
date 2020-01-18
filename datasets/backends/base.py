@@ -271,7 +271,8 @@ class Base(object):
         self._log_buffer.append(action)
 
         data.add_to_list(
-            'logs', log.extract('job.contid,job.uid'))
+            'logs', log.extract(['job.contid,job.uid','source.name__as__source',
+                                 'merger.name__as__merger,target.name__as__target']))
 
     def process_fields(self, data):
         return typecast(data.extract(self.params.fields))

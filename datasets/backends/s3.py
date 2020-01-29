@@ -26,14 +26,18 @@ class S3(CSV):
         self.bucket = Bucket(bucket_name)
 
         self.obj = None
-        for it in self.bucket.objects.filter(Prefix=prefix):
-            self.obj = it
-            break
 
-        if not self.obj:
-            raise prf.exc.HTTPBadRequest('File not found `%s`' % ds.name)
+        if create:
+            self.file_name = 's3://%s/%s' % (self.bucket.name, ds.name)
+        else:
+            for it in self.bucket.objects.filter(Prefix=prefix):
+                self.obj = it
+                break
 
-        self.file_name = 's3://%s/%s' % (self.bucket.name, self.obj.key)
+            if not self.obj:
+                raise prf.exc.HTTPBadRequest('File not found `%s`' % ds.name)
+
+            self.file_name = 's3://%s/%s' % (self.bucket.name, self.obj.key)
 
 
 class S3Backend(object):

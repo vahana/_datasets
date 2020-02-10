@@ -154,7 +154,7 @@ class ESBackend(Base):
         ES.api.cluster.put_settings(body={
             'transient':{'indices.store.throttle.type' : 'none'}})
 
-    def flush(self, data):
+    def flush(self, data, **kw):
         return ES.flush(data)
 
     def raise_or_log(self, data_size, errors):

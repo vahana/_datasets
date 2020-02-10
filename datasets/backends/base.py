@@ -60,6 +60,7 @@ class Base(object):
         self.define_op(params, 'asint',  'log_size', default=1000)
         self.define_op(params, 'aslist', 'log_fields', default=[])
         self.define_op(params, 'asbool', 'log_pretty', default=False)
+        self.define_op(params, 'asint',  'log_level', allow_missing=True)
         self.define_op(params, 'asbool', 'fail_on_error', default=True)
         self.define_op(params, 'asstr',  'op')
         self.define_op(params, 'aslist', 'skip_by', allow_missing=True)
@@ -75,6 +76,7 @@ class Base(object):
         self.define_op(params, 'asint', 'flush_retries', default=2)
 
         self.define_op(params, 'asstr',  'log_ds', default='', mod=str.lower)
+        self.define_op(params, 'asbool',  'skip_logs', default=False)
 
         self._operations['query'] = dict
         self._operations['default'] = dict
@@ -114,7 +116,6 @@ class Base(object):
 
         for chunk in chunks(flush_buffer, self.params.write_buffer_size):
             success, errors, retries = self.flush(chunk)
-
             while(retries and nb_retries):
                 log.debug('RETRY BULK FLUSH for %s docs', len(retries))
                 success2, errors2, retries = self.flush(retries)
@@ -124,6 +125,8 @@ class Base(object):
 
             if errors:
                 self.raise_or_log(len(chunk), errors)
+
+            first_chunk = False
 
         for chunk in chunks(flush_log_buffer, self.params.write_buffer_size):
             success, errors, retries = ES.flush(chunk)
@@ -244,10 +247,7 @@ class Base(object):
 
         return pk_data.concat_values(sep=':')
 
-    def save_log(self, data):
-        if not self.params.get('log_ds'):
-            return
-
+    def process_logs(self, data):
         def build_log(data):
             pk, pkv = self.build_pk(data)
             log = slovar({
@@ -259,6 +259,9 @@ class Base(object):
 
         log = build_log(data)
 
+        if not self.params.get('log_ds'):
+            return log
+
         action = slovar({
             '_index': self.params.log_ds,
             '_op_type': 'create',
@@ -269,18 +272,23 @@ class Base(object):
             action['_type'] = 'notanalyzed'
 
         self._log_buffer.append(action)
-
-        data.add_to_list(
-            'logs', log.extract(['job.contid,job.uid','source.name__as__source',
-                                 'merger.name__as__merger,target.name__as__target']))
+        return log
 
     def process_fields(self, data):
         return typecast(data.extract(self.params.fields))
 
+    def add_logs(self, data, log):
+        data.add_to_list(
+            'logs', log.extract(['job.contid,job.uid','source.name__as__source',
+                                 'merger.name__as__merger,target.name__as__target']))
+        return data['logs']
+
     def pre_save(self, data):
         is_new = self.params.op == 'create'
 
-        self.save_log(data)
+        log = self.process_logs(data)
+        #save logs to add it back at the end
+        logs = self.add_logs(data, log)
 
         data = self.process_empty(data)
 
@@ -296,6 +304,9 @@ class Base(object):
                 data['created_at'] = _now
 
             data['updated_at'] = _now
+
+        if not self.params.skip_logs:
+            data['logs'] = logs
 
         return data
 

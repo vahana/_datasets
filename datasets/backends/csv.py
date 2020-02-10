@@ -155,7 +155,7 @@ class CSV(object):
     def unregister(self):
         pass
 
-class CSVBackend(object):
+class CSVBackend(Base):
 
     @classmethod
     def ls_namespaces(cls):
@@ -192,24 +192,31 @@ class CSVBackend(object):
         return CSV(Base.process_ds(ds), create=define)
 
     def __init__(self, params, job_log):
-        params.asstr('csv_root', default=datasets.Settings.get('csv.root'))
-        params.asbool('drop', default=False)
+        self.define_op(params, 'asstr', 'csv_root', default=datasets.Settings.get('csv.root'))
+        self.define_op(params, 'asbool', 'drop', default=False)
 
-        if not params.get('fields'):
-            fields = maybe_dotted(params.get('fields_file'), throw=False)
+        super().__init__(params, job_log)
+
+        if not self.params.get('fields'):
+            fields = maybe_dotted(self.params.get('fields_file'), throw=False)
             if not fields:
                 raise prf.exc.HTTPBadRequest('Missing fields or fields_file')
 
             if not isinstance(fields, list):
                 raise prf.exc.HTTPBadRequest('Expecting list object in fields_file. Got %s' % fields)
 
-            params.fields = fields
+            self.params.fields = fields
 
-        if not params.csv_root:
+        if not self.params.csv_root:
             raise prf.exc.HTTPBadRequest('Missing csv root. Pass it in params(csv_root) or in config file(csv.root)')
 
-        self.params = params
         self.transformer = self.get_transformer()
+
+        dir_path = os.path.join(self.params.csv_root, self.params.ns)
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+
+        self.file_name = os.path.join(self.params.csv_root, self.params.ns, self.params.name)
 
     def get_transformer(self):
         if self.params.get('transformer'):
@@ -217,37 +224,26 @@ class CSVBackend(object):
             return maybe_dotted(trans)(trans_as=trans_as,
                 **datasets.Settings.update_with(self.params.get('settings', {})))
 
-    def process_many(self, dataset):
-
-        dir_path = os.path.join(self.params.csv_root, self.params.ns)
-        ds_name = os.path.join(self.params.csv_root, self.params.ns, self.params.name)
-
-        file_name = ds_name
-
-        if not os.path.exists(dir_path):
-            os.makedirs(dir_path)
-
-        file_opts = 'w+'
-        skip_headers = False
-
+    def flush(self, objs, **kw):
         #if file already exists, append to it since data is being processed in batches.
-        if not self.params.drop and os.path.isfile(file_name) and os.path.getsize(file_name):
+        if not self.params.drop and os.path.isfile(self.file_name) and os.path.getsize(self.file_name):
             file_opts = 'a+'
             skip_headers = True
+        else:
+            file_opts = 'w+'
+            skip_headers = False
 
-        if self.transformer:
-            _dataset = []
-            for data in dataset:
-                for data in self.transformer.pre_save(data):
-                    _dataset.append(data)
-                    break
-
-            dataset = _dataset
-
-        with open(file_name, file_opts) as csv_file:
-            log.info('Writing csv data to %s' % file_name)
-            csv_data = dict2tab(dataset, self.params.fields, 'csv', skip_headers,
-                            processor=self.params.get('processor', field_processor(self.params.fields)))
+        with open(self.file_name, file_opts) as csv_file:
+            csv_data = dict2tab(objs, self.params.fields, 'csv', skip_headers,
+                                processor=self.params.get('processor', field_processor(self.params.fields)))
             csv_file.write(csv_data)
-            log.info('Done')
+
+        success = total = len(objs)
+        log.debug('BULK FLUSH: total=%s, success=%s, errors=%s, retries=%s', total, success, 0, 0)
+
+        return success, 0, 0
+
+    def create(self, data):
+        with self._buffer_lock:
+            self._buffer.append(data)
 

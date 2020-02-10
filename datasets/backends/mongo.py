@@ -77,7 +77,7 @@ class MONGOBackend(Base):
 
         return obj
 
-    def flush(self, objs):
+    def flush(self, objs, **kw):
         success, errors = self.klass.insert_many(objs, fail_on_error=False)
         log.debug('BULK FLUSH: total=%s, success=%s, errors=%s, retries=%s',
                                             len(objs), success, len(errors), 0)

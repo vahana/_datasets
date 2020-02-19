@@ -125,8 +125,7 @@ class ESBackend(Base):
             self.params.mapping_body = NOT_ANALLYZED
 
         def set_mapping(mapping):
-            self.params.mapping_body = maybe_dotted(self.params.mapping)()
-            _, _, self.params.doc_type = self.params.mapping.rpartition('.')
+            self.params.doc_type, self.params.mapping_body = maybe_dotted(self.params.mapping)()
 
         def use_or_create_mapping(index, mapping, force_update=False):
             doc_types = ES.get_doc_types(index)

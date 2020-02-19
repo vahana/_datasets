@@ -1,6 +1,5 @@
 import logging
 import os
-import pandas as pd
 import csv
 import fnmatch
 
@@ -8,17 +7,15 @@ from slovar import slovar
 
 import prf
 
-from prf.utils.utils import maybe_dotted, parse_specials
-from prf.utils.csv import dict2tab
+from prf.utils.utils import maybe_dotted, parse_specials, pager
+from prf.utils.csv import (dict2tab, csv2dict, pd_read_csv,
+                            get_csv_header, get_csv_total)
+
 import datasets
 from datasets.backends.base import Base
 
 log = logging.getLogger(__name__)
 
-NA_LIST = ['', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan',
-            '1.#IND', '1.#QNAN', 'N/A',
-            # 'NA', #removed this b/c we are using it in `parent` fields as a legit value not None.
-            'NULL', 'NaN', 'n/a', 'nan', 'null']
 
 FNMATCH_PATTERN = '*'
 
@@ -59,6 +56,7 @@ class CSV(object):
             else:
                 log.error('File does not exist %s' % file_name)
         self.file_name = file_name
+        self._total = None
 
     def sniff(self, file_name):
         try:
@@ -67,84 +65,65 @@ class CSV(object):
         except Exception as e:
             log.error('Error sniffing %s file. error: %s', file_name, e)
 
-    def process_params(self, params):
-        _, specials = parse_specials(slovar(params))
+    def get_file_or_buff(self):
+        return self.file_name
 
-        par = slovar()
-        par.skiprows = specials._start or None
-        par.nrows = None if specials._limit == -1 else specials._limit
+    def clean_row(self, _dict):
+        n_dict = slovar()
 
-        return par, specials
+        def _n(text):
+            text = text.strip()
+            unders = ' ,\n'
+            removes = '()/'
 
-    def process_row(self, cell_dict, specials):
-        def clean(_dict):
-            n_dict = slovar()
+            clean = ''
+            for ch in text:
+                if ch in unders:
+                    clean += '_'
+                elif ch in removes:
+                    pass
+                else:
+                    clean += ch
 
-            def _n(text):
-                text = text.strip()
-                unders = ' ,\n'
-                removes = '()/'
+            return clean.lower()
 
-                clean = ''
-                for ch in text:
-                    if ch in unders:
-                        clean += '_'
-                    elif ch in removes:
-                        pass
-                    else:
-                        clean += ch
+        for kk,vv in list(_dict.items()):
+            n_dict[_n(kk)] = vv
 
-                return clean.lower()
-
-            for kk,vv in list(_dict.items()):
-                n_dict[_n(kk)] = vv
-
-            return n_dict
-
-        if '_clean' in specials:
-            _d = clean(cell_dict)
-        else:
-            _d = slovar(cell_dict)
-
-        return _d.unflat() # mongo freaks out when there are dots in the names
-
-    def read_csv(self, page_size, params):
-        return pd.read_csv(self.file_name,
-                        infer_datetime_format=True,
-                        na_values = NA_LIST,
-                        keep_default_na = False,
-                        dtype=object,
-                        chunksize = page_size,
-                        skip_blank_lines=True,
-                        engine = 'c',
-                        **params)
+        return n_dict.unflat() # mongo freaks out when there are dots in the names
 
     def get_collection(self, **params):
-        params = slovar(params)
-        _, specials = self.process_params(params)
+        _, specials = parse_specials(slovar(params))
+
+        if '_clean' in specials:
+            processor = self.clean_row
+        else:
+            processor = lambda x: x.unflat()
 
         if specials._count:
-            return self.get_total(**params)
+            return self.get_total(**specials)
 
-        items = []
-        for chunk in self.get_collection_paged(1000, **params):
-            for each in chunk:
-                items.append(each)
-
-        return Results(specials, items, self.get_total(_limit=-1))
+        items = csv2dict(self.get_file_or_buff(), processor=processor, **specials)
+        return Results(specials, items, self.get_total(**specials))
 
     def get_collection_paged(self, page_size, **params):
-        params = slovar(params)
-        params, specials = self.process_params(params)
+        _, specials = parse_specials(slovar(params))
 
-        df = self.read_csv(page_size, params)
-        for chunk in df:
-            yield [self.process_row(each[1],specials) for each in chunk.fillna('').iterrows()]
+        #read the header here so get_collection doesnt need to
+        params['_header'] = get_csv_header(self.get_file_or_buff())
+
+        pgr = pager(specials._start, page_size, specials._limit)
+
+        results = []
+        for start, count in pgr():
+            params.update({'_start':start, '_limit': count})
+            results = self.get_collection(**params)
+            yield results
 
     def get_total(self, **query):
-        params, specials = self.process_params(query)
-        df = self.read_csv(None, params)
-        return df.shape[0]
+        if not self._total:
+            self._total = get_csv_total(self.get_file_or_buff())
+        return self._total
 
     def drop_collection(self):
         try:

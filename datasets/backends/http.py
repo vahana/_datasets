@@ -60,9 +60,12 @@ class request_api(object):
         self.api = Request(_raise=False)
 
     def get_data(self, resp):
-        dataset = resp.json()
+        try:
+            dataset = resp.json()
+        except Exception as e:
+            raise prf_exc.HTTPBadRequest('Data does not seem to be json format')
 
-        if self.ns:
+        if self.ns and isinstance(dataset, dict):
             dataset = dataset[self.ns]
 
         if not isinstance(dataset, list):

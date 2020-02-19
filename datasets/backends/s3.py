@@ -3,7 +3,6 @@ import os
 import boto3
 import botocore
 import io
-import pandas as pd
 
 from slovar import slovar
 import prf
@@ -11,8 +10,8 @@ import prf.exc as prf_exc
 from prf.utils import maybe_dotted, get_dt_unique_name
 import datasets
 from datasets.backends.base import Base
-from datasets.backends.csv import CSV, field_processor, NA_LIST
-from prf.utils.csv import dict2tab
+from datasets.backends.csv import CSV, field_processor
+from prf.utils.csv import dict2tab, csv2dict
 
 log = logging.getLogger(__name__)
 
@@ -47,22 +46,15 @@ class S3(CSV):
         self.path = '/'.join(path[1:]+[ds.name])
         self.bucket = Bucket(bucket_name)
 
+        self._total = None
+
     def drop_collection(self):
         for it in self.bucket.objects.filter(Prefix=self.path):
             it.delete()
 
-    def read_csv(self, page_size, params):
+    def get_file_or_buff(self):
         obj = boto3.resource('s3').Object(self.bucket.name, self.path)
-        return pd.read_csv(
-                        io.BytesIO(obj.get()['Body'].read()),
-                        infer_datetime_format=True,
-                        na_values = NA_LIST,
-                        keep_default_na = False,
-                        dtype=object,
-                        chunksize = page_size,
-                        skip_blank_lines=True,
-                        engine = 'c',
-                        **params)
+        return io.BytesIO(obj.get()['Body'].read())
 
 
 class S3Backend(Base):

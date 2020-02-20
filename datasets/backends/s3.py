@@ -8,10 +8,10 @@ from slovar import slovar
 import prf
 import prf.exc as prf_exc
 from prf.utils import maybe_dotted, get_dt_unique_name
-import datasets
 from datasets.backends.base import Base
-from datasets.backends.csv import CSV, field_processor
-from prf.utils.csv import dict2tab, csv2dict
+from datasets.backends.csv import field_processor
+from prf.utils.csv import dict2tab
+from prf.s3 import S3
 
 log = logging.getLogger(__name__)
 
@@ -35,26 +35,6 @@ def path2bucket(path):
 def Bucket(name):
     s3 = boto3.resource('s3')
     return s3.Bucket(name)
-
-
-class S3(CSV):
-
-    def __init__(self, ds, create=False):
-        path = ds.ns.split('/')
-        bucket_name = path[0]
-
-        self.path = '/'.join(path[1:]+[ds.name])
-        self.bucket = Bucket(bucket_name)
-
-        self._total = None
-
-    def drop_collection(self):
-        for it in self.bucket.objects.filter(Prefix=self.path):
-            it.delete()
-
-    def get_file_or_buff(self):
-        obj = boto3.resource('s3').Object(self.bucket.name, self.path)
-        return io.BytesIO(obj.get()['Body'].read())
 
 
 class S3Backend(Base):

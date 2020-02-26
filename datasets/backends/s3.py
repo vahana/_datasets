@@ -9,7 +9,6 @@ import prf
 import prf.exc as prf_exc
 from prf.utils import maybe_dotted, get_dt_unique_name
 from datasets.backends.base import Base
-from datasets.backends.csv import field_processor
 from prf.utils.csv import dict2tab
 from prf.s3 import S3
 
@@ -17,20 +16,9 @@ log = logging.getLogger(__name__)
 
 
 def dict2bucket(params):
-    sep = '.' if '.' in params.ns else '/'
-    path = params.ns.split(sep) + [params.name]
+    path = params.ns.split('/') + [params.name]
     return path[0], '/'.join(path[1:]) or '/'
 
-def path2bucket(path):
-    parts = []
-
-    for it in path:
-        if '.' in it:
-            parts +=it.split('.')
-        else:
-            parts.append(it)
-
-    return parts[0], '/'.join(parts[1:]) or None
 
 def Bucket(name):
     s3 = boto3.resource('s3')
@@ -119,9 +107,7 @@ class S3Backend(Base):
 
         obj = s3.Object(bucket_name, path)
 
-        skip_headers = False
-        csv_data = dict2tab(objs, self.params.fields, 'csv', skip_headers,
-                            processor=self.params.get('processor', field_processor(self.params.fields)))
+        csv_data = dict2tab(objs, self.params.fields, 'csv')
 
         try:
             obj.put(Body=csv_data)

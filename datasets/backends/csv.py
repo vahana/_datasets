@@ -16,13 +16,6 @@ from datasets.backends.base import Base
 log = logging.getLogger(__name__)
 
 
-class field_processor:
-    def __init__(self, fields):
-        self.fields = fields
-
-    def __call__(self, data):
-        return data.extract(self.fields).flat(keep_lists=False)
-
 class Results(list):
     def __init__(self, specials, data, total):
         list.__init__(self, [slovar(each) for each in data])
@@ -67,17 +60,20 @@ class CSVBackend(Base):
                                     root_path=datasets.Settings.get('csv.root'))
 
     def __init__(self, params, job_log):
+
         self.define_op(params, 'asstr', 'csv_root', default=datasets.Settings.get('csv.root'))
         self.define_op(params, 'asbool', 'drop', default=False)
 
         super().__init__(params, job_log)
 
-        if not self.params.get('fields'):
-            fields = maybe_dotted(self.params.get('fields_file'), throw=False)
-            if not fields:
-                raise prf.exc.HTTPBadRequest('Missing fields or fields_file')
+        self.params.fields = None
 
-            if not isinstance(fields, list):
+        if not self.params.fields:
+            fields = maybe_dotted(self.params.get('fields_file'), throw=False)
+            # if not fields:
+            #     raise prf.exc.HTTPBadRequest('Missing fields or fields_file')
+
+            if fields and not isinstance(fields, list):
                 raise prf.exc.HTTPBadRequest('Expecting list object in fields_file. Got %s' % fields)
 
             self.params.fields = fields
@@ -109,8 +105,7 @@ class CSVBackend(Base):
             skip_headers = False
 
         with open(self.file_name, file_opts) as csv_file:
-            csv_data = dict2tab(objs, self.params.fields, 'csv', skip_headers,
-                                processor=self.params.get('processor', field_processor(self.params.fields)))
+            csv_data = dict2tab(objs, self.params.fields, 'csv', skip_headers)
             csv_file.write(csv_data)
 
         success = total = len(objs)
@@ -118,7 +113,18 @@ class CSVBackend(Base):
 
         return success, 0, 0
 
+    def log_action(self, data, action):
+        msg = '%s\n%s' % (action.upper(), self.format4logging(data=data))
+        if self.params.dry_run:
+            log.warning('DRY RUN: %s' % msg)
+        else:
+            log.debug(msg)
+
     def create(self, data):
+        data = data.extract(self.params.fields)
+
         with self._buffer_lock:
             self._buffer.append(data)
+
+        self.log_action(data, 'create')
 

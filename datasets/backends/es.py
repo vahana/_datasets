@@ -199,8 +199,13 @@ class ESBackend(Base):
         '''
 
         #pop incoming meta from data first. not the best place, but we need the `_index`.
-        data.pop('_id', None)
+
+        #if _id is used to update, keep it
+        if '_id' not in self.params.pk:
+            data.pop('_id', None)
+
         data.pop('_type', None)
+
         data_index = data.pop('_index', None)
         index = self.klass.index
 

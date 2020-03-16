@@ -66,8 +66,6 @@ class CSVBackend(Base):
 
         super().__init__(params, job_log)
 
-        self.params.fields = None
-
         if not self.params.fields:
             fields = maybe_dotted(self.params.get('fields_file'), throw=False)
             # if not fields:

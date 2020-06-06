@@ -9,6 +9,7 @@ from prf.utils import maybe_dotted, TODAY
 log = logging.getLogger(__name__)
 Settings = slovar()
 
+
 def parse_ds(name, **overwrites):
     if not name or isinstance(name, dict):
         return name

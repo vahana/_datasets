@@ -258,7 +258,10 @@ def connect_namespace(settings, namespace):
     mongo_connect(connect_settings)
 
 
-def registered_namespaces(settings):
+def registered_namespaces(settings=None):
+    if not settings:
+        return mongo.connection.get_connection().database_names()
+
     ns = settings.aslist('dataset.namespaces', '') \
         or settings.aslist('dataset.ns', '') \
 

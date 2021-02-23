@@ -4,11 +4,8 @@ import os
 from slovar import slovar
 
 import prf
-
-from prf.utils.utils import maybe_dotted, parse_specials, pager
-from prf.utils.csv import (dict2tab, csv2dict, pd_read_csv,
-                            get_csv_header, get_csv_total)
-from prf.csv import CSV
+from prf.utils import maybe_dotted, dict2tab
+from prf.fs import FS
 
 import datasets
 from datasets.backends.base import Base
@@ -22,20 +19,24 @@ class Results(list):
         self.total = total
         self.specials = specials
 
-class CSVBackend(Base):
+
+class FSBackend(Base):
+    def __init__(self, params, job_log=None):
+        super().__init__(params, job_log)
+        self.root_dir = datasets.Settings.get('fs.root')
 
     @classmethod
     def ls_namespaces(cls):
-        return os.listdir(datasets.Settings.get('csv.root'))
+        return os.listdir(datasets.Settings.get('fs.root'))
 
     @classmethod
     def is_ns(cls, path):
-        _path = os.path.join(datasets.Settings.get('csv.root'), path)
+        _path = os.path.join(datasets.Settings.get('fs.root'), path)
         return os.path.isdir(_path)
 
     @classmethod
     def ls_ns(cls, ns, flat=False):
-        base_path = os.path.join(datasets.Settings.get('csv.root'), ns)
+        base_path = os.path.join(datasets.Settings.get('fs.root'), ns)
         folders = []
         files = [] # only by extension
 
@@ -56,12 +57,12 @@ class CSVBackend(Base):
 
     @classmethod
     def get_dataset(cls, ds, define=False):
-        return CSV(Base.process_ds(ds), create=define,
-                                    root_path=datasets.Settings.get('csv.root'))
+        return FS(Base.process_ds(ds), create=define,
+                                    root_path=datasets.Settings.get('fs.root'))
 
     def __init__(self, params, job_log):
 
-        self.define_op(params, 'asstr', 'csv_root', default=datasets.Settings.get('csv.root'))
+        self.define_op(params, 'asstr', 'fs_root', default=datasets.Settings.get('fs.root'))
         self.define_op(params, 'asbool', 'drop', default=False)
 
         super().__init__(params, job_log)
@@ -76,16 +77,16 @@ class CSVBackend(Base):
 
             self.params.fields = fields
 
-        if not self.params.csv_root:
-            raise prf.exc.HTTPBadRequest('Missing csv root. Pass it in params(csv_root) or in config file(csv.root)')
+        if not self.params.fs_root:
+            raise prf.exc.HTTPBadRequest('Missing local file root. Pass it in params.fs_root or in config file (fs.root)')
 
         self.transformer = self.get_transformer()
 
-        dir_path = os.path.join(self.params.csv_root, self.params.ns)
+        dir_path = os.path.join(self.params.fs_root, self.params.ns)
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
 
-        self.file_name = os.path.join(self.params.csv_root, self.params.ns, self.params.name)
+        self.file_name = os.path.join(self.params.fs_root, self.params.ns, self.params.name)
 
     def get_transformer(self):
         if self.params.get('transformer'):

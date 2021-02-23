@@ -4,12 +4,11 @@ import boto3
 import botocore
 import io
 
-from slovar import slovar
 import prf
 import prf.exc as prf_exc
-from prf.utils import maybe_dotted, get_dt_unique_name
+from prf.utils import maybe_dotted
 from datasets.backends.base import Base
-from prf.utils.csv import dict2tab
+from prf.utils import dict2tab
 from prf.s3 import S3
 
 log = logging.getLogger(__name__)
@@ -103,7 +102,6 @@ class S3Backend(Base):
         s3 = boto3.resource('s3')
 
         bucket_name, path = dict2bucket(self.params)
-        # path = get_dt_unique_name(path+'_part', only_seconds=True)
 
         obj = s3.Object(bucket_name, path)
 

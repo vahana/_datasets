@@ -1,6 +1,6 @@
 from slovar import slovar
 from datasets import name2be
-from datasets.backends.csv import CSVBackend
+from datasets.backends.fs import FSBackend
 from datasets.backends.mongo import MONGOBackend
 from datasets.backends.es import ESBackend
 from datasets.backends.s3 import S3Backend
@@ -9,7 +9,7 @@ from datasets.backends.http import HTTPBackend
 BACKENDS = slovar(
     ES_BE_NAME = 'es',
     MONGO_BE_NAME = 'mongo',
-    CSV_BE_NAME = 'csv',
+    FS_BE_NAME = 'fs',
     S3_BE_NAME = 's3',
     HTTP_BE_NAME = 'http',
 )

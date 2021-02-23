@@ -6,9 +6,9 @@ import prf
 from slovar.utils import maybe_dotted
 
 from slovar import slovar
-from datasets import get_dataset, get_dataset_meta, drop_dataset, drop_namespace
+from datasets import get_dataset, get_dataset_meta, drop_namespace
 from datasets.backends.mongo import define_datasets, registered_namespaces
-from datasets.backends import BACKENDS, ESBackend, CSVBackend, S3Backend, HTTPBackend
+from datasets.backends import BACKENDS, ESBackend, FSBackend, S3Backend
 
 from prf.utils import urlencode, to_dunders
 from prf.es import ES
@@ -206,6 +206,59 @@ class ESFlatView(BaseView):
             results['_meta']['indices'] = sorted(list(results['_meta'].pop('alias', {}).keys())[:50])
         return results
 
+
+class FSView(BEView):
+
+    def dispatch(self, **kw):
+        path = kw['path']
+        os_path = os.path.join(*path)
+
+        self.be = self.request.matched_route.name
+        ns = path[0]
+        name = None
+
+        if len(path) > 1:
+            name = path[-1]
+            ns = os.path.join(*path[:-1])
+
+        if self.request.method == 'DELETE':
+            if name:
+                return self.delete(ns, name)
+            elif ns and ns != '_':
+                return self.delete_many(ns)
+
+        if ns == '_':
+            result = self.backend()
+
+        elif FSBackend.is_ns(os_path):
+            result = self.namespace(os_path)
+
+        else:
+            result = self.collection(ns, name)
+
+        return self._process(result, many=True)
+
+    def backend(self):
+        base_url = self.request.current_route_url()[:-1]
+        return sorted(['%s%s' % (base_url, x)
+                       for x in FSBackend.ls_namespaces()])
+
+    def namespace(self, ns):
+        match = self._params.get('match', '')
+        _flat = '_flat' in self._params
+
+        base_url = self.request.current_route_url().split('?')[0]
+
+        datasets = []
+
+        for name in FSBackend.ls_ns(ns, _flat):
+            if name.startswith(match):
+                query = self._params.subset('-_limit,-_fields')
+                url = '%s/%s' % (base_url, name)
+                datasets.append(url)
+
+        return sorted(datasets,
+                      key=lambda x: x[1] if query else x[0])
 
 class CSVView(BEView):
 
